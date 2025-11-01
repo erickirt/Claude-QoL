@@ -4,7 +4,7 @@
 
 	const STORAGE_KEY = 'navigation_bookmarks';
 
-	// ======== STORAGE MANAGEMENT ========
+	// #region  STORAGE MANAGEMENT 
 	function getBookmarks(conversationId) {
 		const allBookmarks = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
 		return allBookmarks[conversationId] || {};
@@ -28,7 +28,8 @@
 		saveBookmarks(conversationId, bookmarks);
 	}
 
-	// ======== API HELPERS ========
+	// #endregion
+	// #region  API HELPERS 
 	async function getConversation() {
 		const conversationId = getConversationId();
 		if (!conversationId) {
@@ -39,7 +40,8 @@
 		return new ClaudeConversation(orgId, conversationId);
 	}
 
-	// ======== NAME INPUT MODAL ========
+	// #endregion
+	// #region  NAME INPUT MODAL 
 	async function showNameInputModal(conversationId, currentLeafId) {
 		const name = await showClaudePrompt(
 			'Add Bookmark',
@@ -65,7 +67,8 @@
 		return name;
 	}
 
-	// ======== BOOKMARK ITEM ========
+	// #endregion
+	// #region  BOOKMARK ITEM 
 	function createBookmarkItem(name, bookmarkUuid, conversationId, conversation, onUpdate) {
 		const item = document.createElement('div');
 		item.className = CLAUDE_CLASSES.LIST_ITEM + ' flex items-center gap-2';
@@ -111,7 +114,169 @@
 		return item;
 	}
 
-	// ======== MAIN NAVIGATION MODAL ========
+	//#region TREE VIEW MODAL
+	function buildBookmarkTree(conversationId, conversation) {
+		const ROOT_UUID = "00000000-0000-4000-8000-000000000000";
+		const conversationData = conversation.conversationData;
+
+		// Build message map
+		const messageMap = new Map();
+		for (const msg of conversationData.chat_messages) {
+			messageMap.set(msg.uuid, msg);
+		}
+
+		// Get all bookmarks
+		const bookmarks = getBookmarks(conversationId);
+		const bookmarkUuids = Object.values(bookmarks);
+
+		// Build tree structure
+		const tree = new Map();
+		tree.set(ROOT_UUID, []);
+
+		// For each bookmark, find its parent bookmark
+		for (const [name, bookmarkUuid] of Object.entries(bookmarks)) {
+			let parentBookmarkUuid = ROOT_UUID;
+			let tempId = messageMap.get(bookmarkUuid)?.parent_message_uuid;
+
+			// Walk up until we find another bookmark or hit root
+			while (tempId && tempId !== ROOT_UUID) {
+				if (bookmarkUuids.includes(tempId)) {
+					parentBookmarkUuid = tempId;
+					break;
+				}
+				const parentMsg = messageMap.get(tempId);
+				tempId = parentMsg?.parent_message_uuid;
+			}
+
+			// Add to tree
+			if (!tree.has(parentBookmarkUuid)) {
+				tree.set(parentBookmarkUuid, []);
+			}
+			tree.get(parentBookmarkUuid).push({
+				name,
+				uuid: bookmarkUuid
+			});
+		}
+
+		return { tree, bookmarks };
+	}
+
+	function renderBookmarkTree(tree, parentUuid, depth, conversation, onNavigate) {
+		const children = tree.get(parentUuid) || [];
+		if (children.length === 0) return null;
+
+		const container = document.createElement('div');
+		// Root level: vertical stack, deeper levels: tree structure
+		if (depth === 0) {
+			container.className = 'space-y-4';
+		} else {
+			container.className = 'bookmark-tree-children';
+		}
+
+		for (let i = 0; i < children.length; i++) {
+			const bookmark = children[i];
+			const isLastChild = i === children.length - 1;
+
+			// Wrapper for each bookmark + its children
+			const bookmarkWrapper = document.createElement('div');
+			bookmarkWrapper.className = 'bookmark-tree-node';
+			if (depth > 0) {
+				bookmarkWrapper.classList.add('bookmark-tree-branch');
+				if (isLastChild) {
+					bookmarkWrapper.classList.add('last-child');
+				}
+			}
+
+			// Create bookmark item
+			const item = document.createElement('div');
+			item.className = 'inline-block py-2 px-3 bg-bg-200 border border-border-300 hover:bg-bg-300 rounded cursor-pointer transition-colors';
+
+			// Check if this bookmark has children (is a branch)
+			const hasChildren = tree.has(bookmark.uuid) && tree.get(bookmark.uuid).length > 0;
+			const icon = hasChildren ? '📍' : '📍';
+
+			// Create content
+			const content = document.createElement('div');
+			content.className = 'flex items-center gap-2 whitespace-nowrap';
+
+			const iconSpan = document.createElement('span');
+			iconSpan.textContent = icon;
+			content.appendChild(iconSpan);
+
+			const nameSpan = document.createElement('span');
+			nameSpan.className = 'text-sm text-text-100';
+			nameSpan.textContent = bookmark.name;
+			content.appendChild(nameSpan);
+
+			item.appendChild(content);
+
+			// Click handler
+			item.onclick = async () => {
+				try {
+					const longestLeaf = conversation.findLongestLeaf(bookmark.uuid);
+					await conversation.setCurrentLeaf(longestLeaf.leafId);
+					window.location.reload();
+				} catch (error) {
+					console.error('Navigation failed:', error);
+					showClaudeAlert('Navigation Error', 'Failed to navigate. The bookmark may be invalid.');
+				}
+			};
+
+			bookmarkWrapper.appendChild(item);
+
+			// Recursively render children
+			const childTree = renderBookmarkTree(tree, bookmark.uuid, depth + 1, conversation, onNavigate);
+			if (childTree) {
+				bookmarkWrapper.appendChild(childTree);
+			}
+
+			container.appendChild(bookmarkWrapper);
+		}
+
+		return container;
+	}
+
+	async function showBookmarkTreeModal(conversationId, conversation) {
+		const { tree, bookmarks } = buildBookmarkTree(conversationId, conversation);
+
+		// Check if there are any bookmarks
+		if (Object.keys(bookmarks).length === 0) {
+			showClaudeAlert('No Bookmarks', 'You haven\'t created any bookmarks yet.');
+			return;
+		}
+
+		const contentDiv = document.createElement('div');
+
+		// Render tree starting from root
+		const ROOT_UUID = "00000000-0000-4000-8000-000000000000";
+		const treeContainer = renderBookmarkTree(tree, ROOT_UUID, 0, conversation);
+
+		if (treeContainer) {
+			// Wrap in scrollable container
+			const scrollContainer = document.createElement('div');
+			scrollContainer.className = 'max-h-[60vh] overflow-y-auto';
+			scrollContainer.appendChild(treeContainer);
+			contentDiv.appendChild(scrollContainer);
+		} else {
+			const emptyMsg = document.createElement('div');
+			emptyMsg.className = 'text-center text-text-400 py-8';
+			emptyMsg.textContent = 'No bookmarks to display.';
+			contentDiv.appendChild(emptyMsg);
+		}
+
+		// Create and show modal
+		const modal = new ClaudeModal('Bookmark Tree View', contentDiv);
+		modal.addCancel('Close');
+
+		// Make modal a bit wider
+		modal.modal.classList.remove('max-w-md');
+		modal.modal.classList.add('max-w-2xl');
+
+		modal.show();
+	}
+	// #endregion
+
+	//#region MAIN NAVIGATION MODAL
 	async function showNavigationModal() {
 		const loading = createLoadingModal('Loading conversation data...');
 		loading.show();
@@ -197,8 +362,12 @@
 		updateBookmarksList();
 		contentDiv.appendChild(bookmarksList);
 
-		// Add bookmark button
+		// Bottom buttons row
+		const bottomButtonsRow = document.createElement('div');
+		bottomButtonsRow.className = CLAUDE_CLASSES.FLEX_GAP_2 + ' mt-4';
+
 		const addBtn = createClaudeButton('+ Add Current Position', 'secondary');
+		addBtn.classList.add('w-full');
 		addBtn.onclick = async () => {
 			try {
 				const currentLeafId = conversationData.current_leaf_message_uuid;
@@ -208,15 +377,24 @@
 				// User cancelled, do nothing
 			}
 		};
-		contentDiv.appendChild(addBtn);
+
+		const treeBtn = createClaudeButton('🌳 View Tree', 'secondary');
+		treeBtn.classList.add('w-full');
+		treeBtn.onclick = () => showBookmarkTreeModal(conversationId, conversation);
+
+		bottomButtonsRow.appendChild(addBtn);
+		bottomButtonsRow.appendChild(treeBtn);
+		contentDiv.appendChild(bottomButtonsRow);
 
 		// Create and show modal
 		const modal = new ClaudeModal('Navigation', contentDiv);
 		modal.addCancel('Close');
 		modal.show();
 	}
+	// #endregion
 
-	// ======== BUTTON CREATION ========
+	// #endregion
+	// #region  BUTTON CREATION 
 	function createNavigationButton() {
 		const svgContent = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
 			<polygon points="3 11 22 2 13 21 11 13 3 11"></polygon>
@@ -227,7 +405,8 @@
 		return button;
 	}
 
-	// ======== USER NAVIGATION ========
+	// #endregion
+	// #region  USER NAVIGATION 
 	const UP_ARROW_SVG = `<div class="flex items-center justify-center" style="width: 14px; height: 14px;">
   <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor" xmlns="http://www.w3.org/2000/svg" class="shrink-0" aria-hidden="true">
     <path d="M3.16011 13.8662C2.98312 13.7018 2.95129 13.4389 3.07221 13.2402L3.13374 13.1602L9.63377 6.16016C9.72836 6.05829 9.86101 6 9.99999 6C10.1043 6 10.2053 6.03247 10.289 6.0918L10.3662 6.16016L16.8662 13.1602C17.054 13.3625 17.0421 13.6783 16.8399 13.8662C16.6375 14.054 16.3217 14.0422 16.1338 13.8399L9.99999 7.2334L3.86616 13.8399L3.78999 13.9072C3.60085 14.0422 3.33709 14.0305 3.16011 13.8662Z"/>
@@ -312,8 +491,63 @@
 		});
 	}
 
-	// ======== INITIALIZATION ========
+	// #endregion
+	// #region  INITIALIZATION
+	// ======== INJECT CSS ========
+	function injectTreeStyles() {
+		// Check if already injected
+		if (document.getElementById('bookmark-tree-styles')) return;
+
+		const style = document.createElement('style');
+		style.id = 'bookmark-tree-styles';
+		style.textContent = `
+		/* Tree structure */
+		.bookmark-tree-children {
+			display: flex;
+			flex-direction: column;
+			margin-left: 2rem;
+			gap: 0.5rem;
+		}
+
+		.bookmark-tree-branch {
+			position: relative;
+			padding-left: 2rem;
+		}
+
+		/* Vertical line */
+		.bookmark-tree-branch::before {
+			content: '';
+			position: absolute;
+			left: 0;
+			top: 0;
+			bottom: 0;
+			width: 2px;
+			background: var(--text-text-300, #ffffff);
+		}
+
+		/* Horizontal line */
+		.bookmark-tree-branch::after {
+			content: '';
+			position: absolute;
+			left: 0;
+			top: 1.25rem;
+			width: 1.5rem;
+			height: 2px;
+			background: var(--text-text-300, #ffffff);
+		}
+
+		/* Last child - stop vertical line at this node */
+		.bookmark-tree-branch.last-child::before {
+			bottom: auto;
+			height: 1.25rem;
+		}
+	`;
+
+		document.head.appendChild(style);
+	}
+
 	function initialize() {
+		injectTreeStyles();
 		// Add navigation button to top right
 		setInterval(() => {
 			tryAddTopRightButton("navigation-button", createNavigationButton, 'Navigation');
