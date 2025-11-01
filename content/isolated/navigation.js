@@ -158,20 +158,31 @@
 			});
 		}
 
-		return { tree, bookmarks };
+		// Calculate depth for each bookmark
+		const bookmarkDepths = new Map();
+		for (const [name, bookmarkUuid] of Object.entries(bookmarks)) {
+			let depth = 0;
+			let tempId = bookmarkUuid;
+			while (tempId && tempId !== ROOT_UUID) {
+				depth++;
+				const msg = messageMap.get(tempId);
+				tempId = msg?.parent_message_uuid;
+			}
+			bookmarkDepths.set(bookmarkUuid, depth);
+		}
+
+		return { tree, bookmarks, bookmarkDepths };
 	}
 
-	function renderBookmarkTree(tree, parentUuid, depth, conversation, onNavigate) {
+	function renderBookmarkTree(tree, parentUuid, conversation, onNavigate, bookmarkDepths) {
 		const children = tree.get(parentUuid) || [];
 		if (children.length === 0) return null;
 
+		// Sort children by depth from root
+		children.sort((a, b) => bookmarkDepths.get(a.uuid) - bookmarkDepths.get(b.uuid));
+
 		const container = document.createElement('div');
-		// Root level: vertical stack, deeper levels: tree structure
-		if (depth === 0) {
-			container.className = 'space-y-4';
-		} else {
-			container.className = 'bookmark-tree-children';
-		}
+		container.className = 'bookmark-tree-children';
 
 		for (let i = 0; i < children.length; i++) {
 			const bookmark = children[i];
@@ -179,13 +190,11 @@
 
 			// Wrapper for each bookmark + its children
 			const bookmarkWrapper = document.createElement('div');
-			bookmarkWrapper.className = 'bookmark-tree-node';
-			if (depth > 0) {
-				bookmarkWrapper.classList.add('bookmark-tree-branch');
-				if (isLastChild) {
-					bookmarkWrapper.classList.add('last-child');
-				}
+			bookmarkWrapper.className = 'bookmark-tree-node bookmark-tree-branch';
+			if (isLastChild) {
+				bookmarkWrapper.classList.add('last-child');
 			}
+
 
 			// Create bookmark item
 			const item = document.createElement('div');
@@ -225,7 +234,7 @@
 			bookmarkWrapper.appendChild(item);
 
 			// Recursively render children
-			const childTree = renderBookmarkTree(tree, bookmark.uuid, depth + 1, conversation, onNavigate);
+			const childTree = renderBookmarkTree(tree, bookmark.uuid, conversation, onNavigate, bookmarkDepths);
 			if (childTree) {
 				bookmarkWrapper.appendChild(childTree);
 			}
@@ -237,7 +246,7 @@
 	}
 
 	async function showBookmarkTreeModal(conversationId, conversation) {
-		const { tree, bookmarks } = buildBookmarkTree(conversationId, conversation);
+		const { tree, bookmarks, bookmarkDepths } = buildBookmarkTree(conversationId, conversation);
 
 		// Check if there are any bookmarks
 		if (Object.keys(bookmarks).length === 0) {
@@ -247,9 +256,29 @@
 
 		const contentDiv = document.createElement('div');
 
+		// Create root node (unclickable)
+		const rootNode = document.createElement('div');
+		rootNode.className = 'inline-block py-2 px-3 bg-bg-300 border border-border-300 rounded opacity-60';
+		rootNode.style.cursor = 'default';
+
+		const rootContent = document.createElement('div');
+		rootContent.className = 'flex items-center gap-2 whitespace-nowrap';
+
+		const rootIcon = document.createElement('span');
+		rootIcon.textContent = '🌳';
+		rootContent.appendChild(rootIcon);
+
+		const rootLabel = document.createElement('span');
+		rootLabel.className = 'text-sm text-text-200';
+		rootLabel.textContent = 'Root';
+		rootContent.appendChild(rootLabel);
+
+		rootNode.appendChild(rootContent);
+		contentDiv.appendChild(rootNode);
+
 		// Render tree starting from root
 		const ROOT_UUID = "00000000-0000-4000-8000-000000000000";
-		const treeContainer = renderBookmarkTree(tree, ROOT_UUID, 0, conversation);
+		const treeContainer = renderBookmarkTree(tree, ROOT_UUID, conversation, null, bookmarkDepths);
 
 		if (treeContainer) {
 			// Wrap in scrollable container
@@ -506,6 +535,7 @@
 			display: flex;
 			flex-direction: column;
 			margin-left: 2rem;
+			margin-top: 1rem;  /* Add space between parent and children */
 			gap: 0.5rem;
 		}
 
