@@ -20,6 +20,18 @@
 			messageMap.set(message.uuid, message);
 		}
 
+		// Calculate position with branch awareness
+		const currentLeafId = conversation.conversationData.current_leaf_message_uuid;
+
+		// Step 1: Build array of all ancestors from current leaf
+		const ancestors = [];
+		let tempId = currentLeafId;
+		while (tempId) {
+			ancestors.push(tempId);
+			const tempMsg = messageMap.get(tempId);
+			tempId = tempMsg?.parent_message_uuid;
+		}
+
 		// Search through messages
 		for (let index = 0; index < messages.length; index++) {
 			const message = messages[index];
@@ -44,13 +56,23 @@
 				);
 
 				// Calculate position (messages ago from current leaf)
-				const currentLeafId = conversation.conversationData.current_leaf_message_uuid;
+				// Step 2: Walk from matched message upward until we hit an ancestor
 				let position = 0;
-				let tempId = currentLeafId;
-				while (tempId && tempId !== message.uuid) {
-					position++;
-					const tempMsg = messageMap.get(tempId);
-					tempId = tempMsg?.parent_message_uuid;
+				let isBranched = false;
+
+				if (ancestors.includes(message.uuid)) {
+					// Direct ancestor - just get its index
+					position = ancestors.indexOf(message.uuid);
+					isBranched = false;
+				} else {
+					// Branched - walk upward until we hit the ancestor chain
+					isBranched = true;
+					tempId = message.uuid;
+					while (tempId && !ancestors.includes(tempId)) {
+						const tempMsg = messageMap.get(tempId);
+						tempId = tempMsg?.parent_message_uuid;
+					}
+					position = ancestors.indexOf(tempId);
 				}
 
 				results.push({
@@ -63,6 +85,7 @@
 					matched_message_id: message.uuid,
 					role: message.sender,
 					position: position,
+					is_branched: isBranched,
 					timestamp: message.created_at
 				});
 			}
@@ -130,10 +153,14 @@
 		}
 
 		// Add matched message
+		const positionText = result.is_branched
+			? `Branched ${result.position} ${result.position > 1 ? "messages" : "message"} ago`
+			: `${result.position} ${result.position > 1 ? "messages" : "message"} ago`;
+
 		const matchedBlock = createMessageBlock(
 			result.full_message_text,
 			result.role,
-			`Matched Message (${result.position} messages ago)`,
+			`Matched Message (${positionText})`,
 			true
 		);
 		if (matchedBlock) messagesContainer.appendChild(matchedBlock);
@@ -349,7 +376,11 @@
 				const roleIcon = result.role === 'human' ? '👤' : '🤖';
 				const roleName = result.role === 'human' ? 'User' : 'Claude';
 				const relativeTime = getRelativeTime(result.timestamp);
-				header.textContent = `${roleIcon} ${roleName} (${result.position} messages ago · ${relativeTime})`;
+				const positionText = result.is_branched
+					? `Branched ${result.position} ${result.position > 1 ? "messages" : "message"} ago`
+					: `${result.position} ${result.position > 1 ? "messages" : "message"} ago`;
+
+				header.textContent = `${roleIcon} ${roleName} (${positionText} · ${relativeTime})`;
 
 				const matchText = document.createElement('div');
 				matchText.className = 'text-text-100';
