@@ -31,7 +31,7 @@
 			// Message boundary
 			const roleDelimiter = message.sender === ROLES.USER.apiName ? ROLES.USER.exportDelimiter : ROLES.ASSISTANT.exportDelimiter;
 			const isoTimestamp = message.created_at || message.updated_at;
-			const timestamp = isoTimestamp ? Math.floor(new Date(isoTimestamp).getTime() / 1000) : '';
+			const timestamp = isoTimestamp ? new Date(isoTimestamp).getTime() : '';
 			const timestampSuffix = timestamp ? `:${timestamp}` : '';
 			output += `[${EXPORT_TAG_PREFIX}${roleDelimiter}${timestampSuffix}]\n`;
 
@@ -326,7 +326,7 @@
 			const markerMatch = line.match(TAG_REGEX);
 			if (markerMatch) {
 				const marker = markerMatch[1];
-				const timestampStr = markerMatch[2]; // Unix timestamp in seconds (if present)
+				const timestampStr = markerMatch[2]; // Unix timestamp in milliseconds (if present)
 
 				// Flush previous content
 				flushTextBuffer();
@@ -355,7 +355,7 @@
 
 					// Store timestamp if present
 					if (timestampStr) {
-						currentMessage.created_at = new Date(parseInt(timestampStr) * 1000).toISOString();
+						currentMessage.created_at = new Date(parseInt(timestampStr)).toISOString();
 					}
 
 					currentTag = null;
