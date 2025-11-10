@@ -83,7 +83,7 @@ class ClaudeConversation {
 		let assistantMessage;
 		let attempts = 0;
 		let messages;
-		const maxAttempts = 6;
+		const maxAttempts = 30; // Retry for up to 2.5 minutes
 
 		while (!assistantMessage && attempts < maxAttempts) {
 			if (attempts > 0) {

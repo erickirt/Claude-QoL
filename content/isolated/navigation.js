@@ -294,7 +294,7 @@
 		}
 
 		// Create and show modal
-		const modal = new ClaudeModal('Bookmark Tree View', contentDiv);
+		const modal = new ClaudeModal('Bookmark Tree View (Sorted by depth)', contentDiv);
 		modal.addCancel('Close');
 
 		// Make modal a bit wider
