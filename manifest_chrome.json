@@ -1,7 +1,7 @@
 {
 	"manifest_version": 3,
-	"name": "Claude Enhanced",
-	"version": "2.2.6",
+	"name": "Claude QoL",
+	"version": "2.2.7",
 	"description": "Collection of enhancements for Claude.ai",
 	"permissions": [
 		"storage"
