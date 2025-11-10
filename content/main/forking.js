@@ -203,7 +203,8 @@ If this is a writing or creative discussion, include sections for characters, pl
 			// Find and click the retry button
 			const buttonGroup = forkButton.closest('.justify-between');
 			const retryButton = Array.from(buttonGroup.querySelectorAll('button'))
-				.find(button => button.textContent.includes('Retry'));
+				.reverse()
+				.find(button => button.textContent.trim() !== '');
 
 			if (retryButton) {
 				retryButton.dispatchEvent(new PointerEvent('pointerdown', {
@@ -357,6 +358,9 @@ If this is a writing or creative discussion, include sections for characters, pl
 				allSyncSources.map(sync => processSyncSource(orgId, sync))
 			);*/
 
+
+		// Figure out why we get redirected before the message is visible
+		// Despite waiting for assistant completion. For now, idk. Maybe add a delay? TODO: Test more.
 		await conversation.sendMessageAndWaitForResponse(
 			"This conversation is forked from the attached chatlog.txt. Simply say 'Acknowledged' and wait for user input.",
 			{
@@ -367,6 +371,8 @@ If this is a writing or creative discussion, include sections for characters, pl
 				personalizedStyles: styleData
 			}
 		);
+
+		await new Promise(r => setTimeout(r, 5000));
 
 		return newUuid;
 	}
