@@ -21,7 +21,7 @@
 		}
 	};
 	const EXPORT_TAG_PREFIX = 'CLEXP:';
-	const TAG_REGEX = new RegExp(`^\\[${EXPORT_TAG_PREFIX}([\\da-zA-Z_-]+)\\]$`);
+	const TAG_REGEX = new RegExp(`^\\[${EXPORT_TAG_PREFIX}([\\da-zA-Z_-]+)(?::(\\d+))?\\]$`);
 
 	//#region Export format handlers
 	function formatTxtExport(conversationData, conversationId) {
@@ -29,7 +29,11 @@
 
 		for (const message of conversationData.chat_messages) {
 			// Message boundary
-			output += `[${EXPORT_TAG_PREFIX}${message.sender === ROLES.USER.apiName ? ROLES.USER.exportDelimiter : ROLES.ASSISTANT.exportDelimiter}]\n`;
+			const roleDelimiter = message.sender === ROLES.USER.apiName ? ROLES.USER.exportDelimiter : ROLES.ASSISTANT.exportDelimiter;
+			const isoTimestamp = message.created_at || message.updated_at;
+			const timestamp = isoTimestamp ? new Date(isoTimestamp).getTime() : '';
+			const timestampSuffix = timestamp ? `:${timestamp}` : '';
+			output += `[${EXPORT_TAG_PREFIX}${roleDelimiter}${timestampSuffix}]\n`;
 
 			// Content blocks
 			for (const content of message.content) {
@@ -322,6 +326,7 @@
 			const markerMatch = line.match(TAG_REGEX);
 			if (markerMatch) {
 				const marker = markerMatch[1];
+				const timestampStr = markerMatch[2]; // Unix timestamp in milliseconds (if present)
 
 				// Flush previous content
 				flushTextBuffer();
@@ -347,6 +352,12 @@
 						attachments: [],
 						sync_sources: []
 					};
+
+					// Store timestamp if present
+					if (timestampStr) {
+						currentMessage.created_at = new Date(parseInt(timestampStr)).toISOString();
+					}
+
 					currentTag = null;
 				} else {
 					// Content or property tag
@@ -383,7 +394,7 @@
 
 		for (const message of chat_messages) {
 			const messageId = crypto.randomUUID();
-			const timestamp = new Date().toISOString();
+			const timestamp = message.created_at || new Date().toISOString();
 
 			// Build content array - add timestamps to each content item
 			const content = message.content.map(contentItem => {
