@@ -19,6 +19,7 @@
 			],
 			"js": [
 				"lib/dexie.min.js",
+				"lib/jszip.min.js",
 				"content/helpers/claude-styles.js",
 				"content/helpers/claude-api.js",
 				"content/helpers/search-utils.js",
@@ -41,6 +42,7 @@
 				"https://claude.ai/*"
 			],
 			"js": [
+				"lib/jszip.min.js",
 				"content/helpers/claude-styles.js",
 				"content/helpers/claude-api.js",
 				"content/main/phantom-messages.js",

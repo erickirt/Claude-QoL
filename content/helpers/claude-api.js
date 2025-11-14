@@ -269,6 +269,228 @@ class ClaudeConversation {
 	}
 }
 
+class ClaudeProject {
+	constructor(orgId, projectId) {
+		this.orgId = orgId;
+		this.projectId = projectId;
+		this.projectData = null;
+		this.cachedDocs = null;
+		this.cachedFiles = null;
+	}
+
+	// Get project data
+	async getData(forceRefresh = false) {
+		if (!this.projectData || forceRefresh) {
+			const response = await fetch(`/api/organizations/${this.orgId}/projects/${this.projectId}`);
+			if (!response.ok) {
+				throw new Error('Failed to fetch project data');
+			}
+			this.projectData = await response.json();
+		}
+		return this.projectData;
+	}
+
+	// Get syncs
+	async getSyncs() {
+		const response = await fetch(`/api/organizations/${this.orgId}/projects/${this.projectId}/syncs`);
+		if (!response.ok) {
+			throw new Error('Failed to fetch project syncs');
+		}
+		return await response.json();
+	}
+
+	// Get docs (attachments) - always fetch, but cache result
+	async getDocs() {
+		const response = await fetch(`/api/organizations/${this.orgId}/projects/${this.projectId}/docs`);
+		if (!response.ok) {
+			throw new Error('Failed to fetch project docs');
+		}
+		this.cachedDocs = await response.json();
+		return this.cachedDocs;
+	}
+
+	// Get files - always fetch, but cache result
+	async getFiles() {
+		const response = await fetch(`/api/organizations/${this.orgId}/projects/${this.projectId}/files`);
+		if (!response.ok) {
+			throw new Error('Failed to fetch project files');
+		}
+		this.cachedFiles = await response.json();
+		return this.cachedFiles;
+	}
+
+	// Download attachment (doc) - content is already in the docs response
+	async downloadAttachment(docId) {
+		// Read from cache if available
+		if (!this.cachedDocs) {
+			await this.getDocs();
+		}
+
+		const doc = this.cachedDocs.find(d => d.uuid === docId);
+
+		if (!doc) {
+			throw new Error(`Doc ${docId} not found`);
+		}
+
+		// Create blob from content
+		const blob = new Blob([doc.content], { type: 'text/plain' });
+
+		// Trigger download
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = doc.file_name;
+		document.body.appendChild(a);
+		a.click();
+		document.body.removeChild(a);
+		URL.revokeObjectURL(url);
+	}
+
+	// Download file - needs to determine URL based on file type
+	async downloadFile(fileId) {
+		// Read from cache if available
+		if (!this.cachedFiles) {
+			await this.getFiles();
+		}
+
+		const file = this.cachedFiles.find(f => f.file_uuid === fileId);
+
+		if (!file) {
+			throw new Error(`File ${fileId} not found`);
+		}
+
+		let downloadUrl;
+
+		// Determine download URL based on file type
+		if (file.file_kind === 'document' && file.document_asset) {
+			// PDF or document - use document_asset URL
+			downloadUrl = file.document_asset.url;
+		} else if (file.file_kind === 'image') {
+			// Image - prefer preview_url over thumbnail_url
+			downloadUrl = file.preview_url || file.thumbnail_url;
+
+			// Or look for original asset if available
+			if (file.preview_asset?.file_variant === 'original') {
+				downloadUrl = file.preview_asset.url;
+			} else if (file.thumbnail_asset?.file_variant === 'original') {
+				downloadUrl = file.thumbnail_asset.url;
+			}
+		} else {
+			// Fallback to preview_url if available
+			downloadUrl = file.preview_url || file.thumbnail_url;
+		}
+
+		if (!downloadUrl) {
+			throw new Error(`No download URL found for file ${fileId}`);
+		}
+
+		// Fetch the actual file content
+		const response = await fetch(downloadUrl);
+		if (!response.ok) {
+			throw new Error(`Failed to download file ${fileId}`);
+		}
+
+		const blob = await response.blob();
+
+		// Trigger download
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = file.file_name;
+		document.body.appendChild(a);
+		a.click();
+		document.body.removeChild(a);
+		URL.revokeObjectURL(url);
+	}
+
+	// Download all files and attachments as a zip
+	async downloadAll() {
+
+		// Fetch project data and file lists
+		const [projectData, docs, files] = await Promise.all([
+			this.getData(),
+			this.getDocs(),
+			this.getFiles()
+		]);
+
+		const projectName = projectData.name || 'project';
+
+		// Create zip
+		const zip = new JSZip();
+
+		// Add docs (content is already available)
+		for (const doc of docs) {
+			// Add UUID to filename to avoid collisions
+			const filename = this._makeUniqueFilename(doc.file_name, doc.uuid);
+			zip.file(filename, doc.content);
+		}
+
+		// Fetch and add files
+		for (const file of files) {
+			let downloadUrl;
+
+			// Determine download URL based on file type
+			if (file.file_kind === 'document' && file.document_asset) {
+				downloadUrl = file.document_asset.url;
+			} else if (file.file_kind === 'image') {
+				downloadUrl = file.preview_url || file.thumbnail_url;
+
+				if (file.preview_asset?.file_variant === 'original') {
+					downloadUrl = file.preview_asset.url;
+				} else if (file.thumbnail_asset?.file_variant === 'original') {
+					downloadUrl = file.thumbnail_asset.url;
+				}
+			} else {
+				downloadUrl = file.preview_url || file.thumbnail_url;
+			}
+
+			if (!downloadUrl) {
+				continue;
+			}
+
+			try {
+				const response = await fetch(downloadUrl);
+				if (!response.ok) {
+					console.error(`[ClaudeProject] Failed to fetch ${file.file_name}`);
+					continue;
+				}
+				const blob = await response.blob();
+
+				// Add UUID to filename to avoid collisions
+				const filename = this._makeUniqueFilename(file.file_name, file.file_uuid);
+				zip.file(filename, blob);
+			} catch (error) {
+				console.error(`[ClaudeProject] Error downloading ${file.file_name}:`, error);
+			}
+		}
+
+		// Generate zip and trigger download
+		const zipBlob = await zip.generateAsync({ type: 'blob' });
+
+		const url = URL.createObjectURL(zipBlob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = `${projectName}.zip`;
+		document.body.appendChild(a);
+		a.click();
+		document.body.removeChild(a);
+		URL.revokeObjectURL(url);
+	}
+
+	// Helper to make unique filenames
+	_makeUniqueFilename(filename, uuid) {
+		// Split filename into name and extension
+		const lastDot = filename.lastIndexOf('.');
+		if (lastDot === -1) {
+			// No extension
+			return `${filename}-${uuid}`;
+		}
+
+		const name = filename.substring(0, lastDot);
+		const ext = filename.substring(lastDot);
+		return `${name}-${uuid}${ext}`;
+	}
+}
 
 
 // Account settings management
