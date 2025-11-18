@@ -417,21 +417,23 @@ If this is a writing or creative discussion, include sections for characters, pl
 		// Find the point where we'd exceed maxTokens
 		for (let i = 0; i < messages.length; i++) {
 			const msgTokens = estimateTokens([messages[i]]);
-			totalTokens += msgTokens;
-			splitIndex = i + 1;
 
-			if (totalTokens >= maxTokens) {
+			// Check if adding this message would exceed limit
+			if (totalTokens + msgTokens > maxTokens && splitIndex > 0) {
+				// Don't add this message
 				break;
 			}
+
+			totalTokens += msgTokens;
+			splitIndex = i + 1;
 		}
 
-		// If we took everything, return all
-		if (splitIndex >= messages.length) {
-			return messages.length;
+		// If we took nothing, take at least one message (avoid infinite loop)
+		if (splitIndex === 0) {
+			splitIndex = 1;
 		}
 
 		// Adjust forward to ensure we split before a user message
-		// (i.e., after an assistant message)
 		while (splitIndex < messages.length && messages[splitIndex].sender !== 'human') {
 			splitIndex++;
 		}
@@ -445,6 +447,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 	}
 
 	async function generateSummaryForChunk(tempConversation, messages, priorSummaryTexts) {
+		console.log("Generating summary for chunk with", messages.length, "messages");
 		const includeAttachments = pendingFork.includeAttachments && pendingFork.keepFilesFromSummarized;
 
 		// Extract from messages directly
@@ -509,6 +512,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 
 			if (msgTokens <= MAX_CHUNK_SIZE || !msg.attachments || msg.attachments.length <= 1) {
 				// Keep as-is: normal size, or can't split further
+				console.log('Message within size limits or has no/single attachment, keeping as is:', msg.uuid);
 				normalized.push(msg);
 				continue;
 			}
@@ -520,9 +524,10 @@ If this is a writing or creative discussion, include sections for characters, pl
 
 			for (const attachment of msg.attachments) {
 				const attTokens = Math.ceil((attachment.extracted_content?.length || 0) / 4);
-
+				console.log(`Attachment tokens: ${attTokens} for attachment ${attachment.file_name}`);
 				if (attTokens > MAX_CHUNK_SIZE) {
 					// Single attachment oversized, give it own message
+					console.warn('Single attachment exceeds max chunk size, placing in its own message:', attachment.file_name);
 					if (currentChunk.length > 0) {
 						attachmentChunks.push(currentChunk);
 						currentChunk = [];
@@ -531,10 +536,12 @@ If this is a writing or creative discussion, include sections for characters, pl
 					attachmentChunks.push([attachment]);
 				} else if (currentTokens + attTokens > MAX_CHUNK_SIZE) {
 					// Would exceed, start new chunk
+					console.log('Current chunk full, starting new chunk for attachment:', attachment.file_name);
 					attachmentChunks.push(currentChunk);
 					currentChunk = [attachment];
 					currentTokens = attTokens;
 				} else {
+					console.log('Adding attachment to current chunk:', attachment.file_name);
 					currentChunk.push(attachment);
 					currentTokens += attTokens;
 				}
@@ -544,16 +551,55 @@ If this is a writing or creative discussion, include sections for characters, pl
 				attachmentChunks.push(currentChunk);
 			}
 
-			// Create synthetic messages
+			// Create synthetic messages - split into multiple of same sender type
+			console.log(`Splitting message ${msg.uuid} into ${attachmentChunks.length} chunks.`);
+
+			const originalSender = msg.sender;
+			const alternateSender = originalSender === 'human' ? 'assistant' : 'human';
+
+			let previousUuid = msg.parent_message_uuid;
+
 			for (let i = 0; i < attachmentChunks.length; i++) {
+				const isLast = i === attachmentChunks.length - 1;
+
+				// Original sender message with attachments
+				const senderUuid = isLast ? msg.uuid : crypto.randomUUID();
 				normalized.push({
 					...msg,
-					uuid: i === 0 ? msg.uuid : crypto.randomUUID(),
+					uuid: senderUuid,
+					parent_message_uuid: previousUuid,
+					sender: originalSender,
 					attachments: attachmentChunks[i],
-					files_v2: i === 0 ? msg.files_v2 : [],
-					files: i === 0 ? msg.files : []
+					files_v2: (i === 0) ? msg.files_v2 : [],
+					files: (i === 0) ? msg.files : [],
+					content: (i === 0) ? msg.content : [{
+						type: 'text',
+						text: '[Continued attachments from previous message]'
+					}]
 				});
+
+				previousUuid = senderUuid;
+
+				// Add acknowledgment (except after last chunk)
+				if (!isLast) {
+					const ackUuid = crypto.randomUUID();
+					normalized.push({
+						uuid: ackUuid,
+						parent_message_uuid: senderUuid,
+						sender: alternateSender,
+						content: [{ type: 'text', text: 'Acknowledged.' }],
+						files_v2: [],
+						files: [],
+						attachments: [],
+						sync_sources: [],
+						created_at: msg.created_at
+					});
+
+					previousUuid = ackUuid;
+				}
 			}
+
+			console.log(`Message ${msg.uuid} split into ${attachmentChunks.length} chunks with acknowledgments.`);
 		}
 
 		return normalized;
@@ -610,7 +656,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 
 			const summaryTexts = [];
 			let remainingMessages = messages;
-
+			console.log('Chunk sizes for summarization:', chunkSizes);
 			// Process each chunk
 			for (let i = 0; i < chunkSizes.length; i++) {
 				const targetSize = chunkSizes[i];
@@ -630,6 +676,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 
 				// Safety check, skip empty chunks
 				if (chunk.length === 0) {
+					console.warn('Skipping empty chunk during summarization');
 					continue;
 				}
 
