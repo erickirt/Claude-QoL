@@ -48,7 +48,7 @@ class ClaudeConversation {
 			syncSources = [],
 			personalizedStyles = null
 		} = options;
-		// Build the request body dynamically
+
 		const requestBody = {
 			prompt,
 			parent_message_uuid: parentMessageUuid,
@@ -59,12 +59,13 @@ class ClaudeConversation {
 			rendering_mode: "messages"
 		};
 
-		// Only add model if it's not null
 		if (model !== null) {
 			requestBody.model = model;
 		}
 
-		// Send the message
+		// Log time BEFORE sending request
+		const requestSentTime = new Date().toISOString();
+
 		const response = await fetch(`/api/organizations/${this.orgId}/chat_conversations/${this.conversationId}/completion`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
@@ -76,38 +77,70 @@ class ClaudeConversation {
 			throw new Error('Failed to send message');
 		}
 
-		// Wait for completion using the new status endpoint
+		// Wait for completion
 		await this.waitForCompletion();
 
-		// Now fetch the actual assistant message
+		// Find assistant message created AFTER our request
 		let assistantMessage;
 		let attempts = 0;
 		let messages;
-		const maxAttempts = 30; // Retry for up to 2.5 minutes
+		const maxAttempts = 30;
 
 		while (!assistantMessage && attempts < maxAttempts) {
 			if (attempts > 0) {
-				console.log(`Assistant message not found, waiting 5 seconds and retrying (attempt ${attempts}/${maxAttempts})...`);
+				console.log(`Assistant message not found or too old, waiting 5 seconds and retrying (attempt ${attempts}/${maxAttempts})...`);
 				await new Promise(r => setTimeout(r, 5000));
 			}
 			messages = await this.getMessages(false, true);
-			assistantMessage = messages.find(msg => msg.sender === 'assistant');
+			assistantMessage = messages.find(msg =>
+				msg.sender === 'assistant' &&
+				msg.created_at > requestSentTime
+			);
 			attempts++;
 		}
 
 		if (!assistantMessage) {
 			console.error('Messages after retry:', messages);
+			console.error('Request sent at:', requestSentTime);
 			throw new Error('Completion finished but no assistant message found after retry');
 		}
 
 		return assistantMessage;
 	}
 
-	// Wait for completion using the status endpoint
 	async waitForCompletion(maxMinutes = 3) {
-		const maxRetries = Math.floor((maxMinutes * 60) / 5); // Check every 5 seconds
-		const pollInterval = 5000; // 5 seconds
+		const maxRetries = Math.floor((maxMinutes * 60) / 5);
+		const pollInterval = 5000;
 
+		// STEP 1: Wait until request enters pending state
+		let seenPending = false;
+		console.log('Waiting for request to enter pending state...');
+
+		for (let attempt = 0; attempt < 12 && !seenPending; attempt++) { // Max 1 minute to start
+			await new Promise(r => setTimeout(r, pollInterval));
+
+			const response = await fetch(
+				`/api/organizations/${this.orgId}/chat_conversations/${this.conversationId}/completion_status?poll=false`
+			);
+
+			if (!response.ok) {
+				throw new Error('Failed to check completion status');
+			}
+
+			const status = await response.json();
+
+			if (status.is_pending) {
+				seenPending = true;
+				console.log('Request is now pending, waiting for completion...');
+				break;
+			}
+		}
+
+		if (!seenPending) {
+			throw new Error('Request never entered pending state within 1 minute');
+		}
+
+		// STEP 2: Now wait for completion
 		for (let attempt = 0; attempt < maxRetries; attempt++) {
 			await new Promise(r => setTimeout(r, pollInterval));
 
@@ -123,12 +156,10 @@ class ClaudeConversation {
 
 			const status = await response.json();
 
-			// Check for errors
 			if (status.is_error) {
 				throw new Error(`Completion error: ${status.error_detail || status.error_code || 'Unknown error'}`);
 			}
 
-			// Check if complete
 			if (!status.is_pending) {
 				console.log('Completion finished');
 				return;
