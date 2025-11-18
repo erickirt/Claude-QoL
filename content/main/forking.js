@@ -58,7 +58,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 		const rawTextContainer = document.createElement('div');
 		rawTextContainer.className = 'mb-4 space-y-2 border border-border-300 rounded p-3';
 
-		const rawTextSlider = createClaudeSlider('Preserve X% of recent messages verbatim:', 50, {
+		const rawTextSlider = createClaudeSlider('Preserve X% of recent messages verbatim:', 25, {
 			leftLabel: 'Summarize all',
 			rightLabel: 'Summarize none'
 		});
@@ -87,11 +87,6 @@ If this is a writing or creative discussion, include sections for characters, pl
 
 		rawTextContainer.appendChild(summaryPromptContainer);
 		content.appendChild(rawTextContainer);
-
-		// Toggle visibility of summary prompt input based on slider value
-		rawTextSlider.input.addEventListener('change', (e) => {
-			summaryPromptContainer.style.display = e.target.value < 100 ? 'block' : 'none';
-		});
 
 		// Include files toggle
 		const includeFilesContainer = document.createElement('div');
@@ -127,13 +122,13 @@ If this is a writing or creative discussion, include sections for characters, pl
 		// Show/hide sub-toggles based on conditions
 		function updateSubToggleVisibility() {
 			const isSummarizing = rawTextSlider.input.value < 100;
+			summaryPromptContainer.style.display = isSummarizing ? 'block' : 'none';
 
 			keepFilesFromSummarizedToggle.container.style.display =
 				(includeFilesToggle.input.checked && isSummarizing) ? 'flex' : 'none';
 
 			keepToolCallsFromSummarizedToggle.container.style.display =
 				(includeToolCallsToggle.input.checked && isSummarizing) ? 'flex' : 'none';
-
 		}
 
 		// Attach listeners
@@ -377,114 +372,239 @@ If this is a writing or creative discussion, include sections for characters, pl
 		return newUuid;
 	}
 
-	async function getSummaryMessages(orgId, messagesToSummarize) {
-		const summaryPrompt = pendingFork.summaryPrompt;
-		const includeAttachments = pendingFork.includeAttachments && pendingFork.keepFilesFromSummarized;
+	function buildSummaryPrompt(priorSummaryCount, includeAttachments) {
+		let fullPrompt = pendingFork.summaryPrompt;
 
-		// Collect all files and attachments from messages being summarized
-		const files = messagesToSummarize.flatMap(m => m.files_v2 || []);
-		const attachments = messagesToSummarize.flatMap(m => m.attachments || []);
-		const syncSources = messagesToSummarize.flatMap(m => m.sync_sources || []);
-		const toolCallContent = messagesToSummarize.flatMap(msg =>
-			msg.content.filter(item =>
-				item.type === 'tool_use' || item.type === 'tool_result'
-			)
-		);
-
-		// Adjust prompt based on whether files will be forwarded
-		let fullPrompt = summaryPrompt;
-		if (includeAttachments) {
-			fullPrompt += "\n\nIMPORTANT: Don't include any information already present in the other attachments, as those will be forwarded to the new chat as well. Do not summarize the content of any attached files - only summarize the conversation itself.";
-		} else {
-			fullPrompt += "\n\nIMPORTANT: Since files will NOT be forwarded to the new conversation, please also include summaries of any file contents that are relevant to understanding the conversation.";
+		// Always add prior summary warning if there are any
+		if (priorSummaryCount > 0) {
+			fullPrompt += `\n\nIMPORTANT: I've attached ${priorSummaryCount} previous summary files (summary_chunk_1.txt, summary_chunk_2.txt, etc.) for context. These contain summaries of earlier parts of the conversation. DO NOT re-summarize these summaries - they are only for your understanding of what came before. Only summarize the NEW conversation in chatlog.txt.`;
 		}
 
-		// Format messages as chatlog for summarization
-		const chatlogText = messagesToSummarize.map((msg, index) => {
+		// Add file handling instruction based on settings
+		if (includeAttachments) {
+			fullPrompt += "\n\nOther attached files will be forwarded to the new chat - don't summarize them, only the conversation itself.";
+		} else {
+			fullPrompt += "\n\nFiles will NOT be forwarded, so include summaries of relevant file contents in your summary.";
+		}
+
+		return fullPrompt;
+	}
+
+	function estimateTokens(messages) {
+		let totalChars = 0;
+
+		for (const msg of messages) {
+			const text = formatMessageContent(msg);
+			totalChars += text.length;
+		}
+
+		return Math.ceil(totalChars / 4);
+	}
+
+	function takeMessagesUpToTokens(messages, maxTokens) {
+		let totalTokens = 0;
+		let splitIndex = 0;
+
+		// Find the point where we'd exceed maxTokens
+		for (let i = 0; i < messages.length; i++) {
+			const msgTokens = estimateTokens([messages[i]]);
+			totalTokens += msgTokens;
+			splitIndex = i + 1;
+
+			if (totalTokens >= maxTokens) {
+				break;
+			}
+		}
+
+		// If we took everything, return all
+		if (splitIndex >= messages.length) {
+			return messages.length;
+		}
+
+		// Adjust forward to ensure we split before a user message
+		// (i.e., after an assistant message)
+		while (splitIndex < messages.length && messages[splitIndex].sender !== 'human') {
+			splitIndex++;
+		}
+
+		// If adjustment went past the end, just take everything
+		if (splitIndex >= messages.length) {
+			return messages.length;
+		}
+
+		return splitIndex;
+	}
+
+	async function generateSummaryForChunk(tempConversation, messages, priorSummaryTexts) {
+		const includeAttachments = pendingFork.includeAttachments && pendingFork.keepFilesFromSummarized;
+
+		// Extract from messages directly
+		const files = messages.flatMap(m => m.files_v2 || []);
+		const attachments = messages.flatMap(m => m.attachments || []);
+		const syncSources = messages.flatMap(m => m.sync_sources || []);
+
+		// Build prompt
+		const fullPrompt = buildSummaryPrompt(priorSummaryTexts.length, includeAttachments);
+
+		// Format messages as chatlog
+		const chatlogText = messages.map((msg) => {
 			const role = msg.sender === 'human' ? '[User]' : '[Assistant]';
 			const text = formatMessageContent(msg);
 			return `${role}\n${text}`;
 		}).join('\n\n');
 
-		// Create temporary conversation for summary
+		// Download and upload files
+		const downloadedFiles = await downloadFiles(files.map(f => ({
+			uuid: f.file_uuid,
+			url: f.file_kind === "image" ? f.preview_asset.url : f.document_asset.url,
+			kind: f.file_kind,
+			name: f.file_name
+		})));
+
+		const uploadedFileUuids = await Promise.all(
+			downloadedFiles.map(file => uploadFile(tempConversation.orgId, file).then(meta => meta.file_uuid))
+		);
+
+		// Build attachments array
+		const summaryAttachments = [
+			...priorSummaryTexts.map((text, index) => ({
+				extracted_content: text,
+				file_name: `summary_chunk_${index + 1}.txt`,
+				file_size: text.length,
+				file_type: "text/plain"
+			})),
+			...attachments,
+			{
+				extracted_content: chatlogText,
+				file_name: "chatlog.txt",
+				file_size: chatlogText.length,
+				file_type: "text/plain"
+			}
+		];
+
+		// Get summary using the passed conversation
+		const assistantMessage = await tempConversation.sendMessageAndWaitForResponse(fullPrompt, {
+			attachments: summaryAttachments,
+			files: uploadedFileUuids,
+		});
+
+		return ClaudeConversation.extractMessageText(assistantMessage);
+	}
+
+	async function chunkAndSummarize(orgId, messages) {
+		// Collect ALL files/attachments/toolCalls from entire summarized section upfront
+		const allFiles = messages.flatMap(m => m.files_v2 || []);
+		const allAttachments = messages.flatMap(m => m.attachments || []);
+		const allToolCalls = messages.flatMap(m =>
+			m.content.filter(item => item.type === 'tool_use' || item.type === 'tool_result')
+		);
+
+		// Calculate total tokens for progress tracking
+		const totalTokens = estimateTokens(messages);
+		let processedTokens = 0;
+		// Initial modal state
+		if (pendingFork.loadingModal) {
+			pendingFork.loadingModal.setContent(
+				createLoadingContent(`Summarizing conversation...\nCurrent progress: ${processedTokens.toLocaleString()} / ${totalTokens.toLocaleString()} tokens`)
+			);
+		}
+
+		// Create ONE temp conversation for all summaries
 		const summaryConvoName = `Temp_Summary_${Date.now()}`;
 		const tempConversation = new ClaudeConversation(orgId);
-		const summaryConvoId = await tempConversation.create(summaryConvoName, 'claude-haiku-4-5-20251001', null);
+		await tempConversation.create(summaryConvoName, 'claude-haiku-4-5-20251001', null);
 
 		try {
-			// Download and upload files for summary generation
-			const downloadedFiles = await downloadFiles(files.map(f => ({
-				uuid: f.file_uuid,
-				url: f.file_kind === "image" ? f.preview_asset.url : f.document_asset.url,
-				kind: f.file_kind,
-				name: f.file_name
-			})));
+			const summaryTexts = [];
+			let remainingMessages = messages;
+			// Get all summaries
+			while (remainingMessages.length > 0) {
+				const tokens = estimateTokens(remainingMessages);
 
-			const uploadedFileUuids = await Promise.all(
-				downloadedFiles.map(file => uploadFile(orgId, file).then(meta => meta.file_uuid))
-			);
-
-			/*const processedSyncSources = await Promise.all(
-				syncSources.map(sync => processSyncSource(orgId, sync))
-			);*/
-			// TODO: Support these. For now, skip them.
-
-			// Add chatlog as attachment
-			const summaryAttachments = [
-				...attachments,
-				{
-					extracted_content: chatlogText,
-					file_name: "chatlog.txt",
-					file_size: chatlogText.length,
-					file_type: "text/plain"
+				let chunk;
+				if (tokens > 25000) {
+					const splitIndex = takeMessagesUpToTokens(remainingMessages, 25000);
+					chunk = remainingMessages.slice(0, splitIndex);
+					remainingMessages = remainingMessages.slice(splitIndex);
+				} else {
+					chunk = remainingMessages;
+					remainingMessages = [];
 				}
-			];
 
-			// Get summary
-			const assistantMessage = await tempConversation.sendMessageAndWaitForResponse(fullPrompt, {
-				attachments: summaryAttachments,
-				files: uploadedFileUuids,
-				//syncSources: processedSyncSources
-			});
+				// Update loading modal
+				const chunkTokens = estimateTokens(chunk);
 
-			const summaryText = ClaudeConversation.extractMessageText(assistantMessage);
+				// Generate summary
+				const summaryText = await generateSummaryForChunk(
+					tempConversation,
+					chunk,
+					summaryTexts
+				);
 
-			// Return synthetic messages
-			// If includeAttachments is true, attach the files/attachments to the synthetic user message
-			const userUuid = crypto.randomUUID();
+				processedTokens += chunkTokens;
 
-			return [
-				{
+				if (pendingFork.loadingModal) {
+					pendingFork.loadingModal.setContent(
+						createLoadingContent(`Summarizing conversation...\nCurrent progress: ${processedTokens.toLocaleString()} / ${totalTokens.toLocaleString()} tokens`)
+					);
+				}
+
+				summaryTexts.push(summaryText);
+			}
+
+			// LOOP 2: Create synthetic message pairs from summaries
+			const syntheticMessages = [];
+
+			for (let i = 0; i < summaryTexts.length; i++) {
+				const summaryText = summaryTexts[i];
+				const isFirstPair = i === 0;
+
+				const userUuid = crypto.randomUUID();
+				const assistantUuid = crypto.randomUUID();
+
+				// Parent is either root or the last message in the array
+				const parentUuid = syntheticMessages.at(-1)?.uuid ?? "00000000-0000-4000-8000-000000000000";
+
+				const userMessage = {
 					uuid: userUuid,
-					parent_message_uuid: "00000000-0000-4000-8000-000000000000",
+					parent_message_uuid: parentUuid,
 					sender: 'human',
 					content: [{ type: 'text', text: summaryText }],
-					files_v2: (pendingFork.includeAttachments && pendingFork.keepFilesFromSummarized) ? files : [],
-					files: (pendingFork.includeAttachments && pendingFork.keepFilesFromSummarized) ? files.map(f => f.file_uuid) : [],
-					attachments: (pendingFork.includeAttachments && pendingFork.keepFilesFromSummarized) ? attachments : [],
+					files_v2: isFirstPair && pendingFork.includeAttachments && pendingFork.keepFilesFromSummarized ? allFiles : [],
+					files: isFirstPair && pendingFork.includeAttachments && pendingFork.keepFilesFromSummarized ? allFiles.map(f => f.file_uuid) : [],
+					attachments: isFirstPair && pendingFork.includeAttachments && pendingFork.keepFilesFromSummarized ? allAttachments : [],
 					sync_sources: [],
 					created_at: new Date().toISOString(),
-				},
-				{
-					uuid: crypto.randomUUID(),
+				};
+
+				const assistantMessage = {
+					uuid: assistantUuid,
 					parent_message_uuid: userUuid,
 					sender: 'assistant',
 					content: [
-						{ type: 'text', text: 'Acknowledged. I understand the context from the summary and am ready to continue our conversation.' },
-						...(pendingFork.includeToolCalls && pendingFork.keepToolCallsFromSummarized ? toolCallContent : [])
+						{ type: 'text', text: 'Acknowledged. I understand the context from the summary and am ready to continue our conversation.' }
 					],
 					files_v2: [],
 					files: [],
 					attachments: [],
 					sync_sources: [],
 					created_at: new Date().toISOString(),
+				};
+
+				// Add tool calls to LAST assistant message only
+				if (i === summaryTexts.length - 1 && pendingFork.includeToolCalls && pendingFork.keepToolCallsFromSummarized) {
+					assistantMessage.content.push(...allToolCalls);
 				}
-			];
+
+				syntheticMessages.push(userMessage, assistantMessage);
+			}
+			console.log('Generated synthetic summary messages:', JSON.stringify(syntheticMessages));
+			return syntheticMessages;
 		} finally {
-			//window.location.href = `/chat/${summaryConvoId}`; // For debugging
-			await tempConversation.delete();
+			// await tempConversation.delete(); // TODO: Uncomment.
 		}
 	}
+
 	//#endregion
 
 	//#region Fetch patching
@@ -544,7 +664,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 					const toKeep = messages.slice(messages.length - split);
 
 					if (toSummarize.length > 0) {
-						const summaryMsgs = await getSummaryMessages(orgId, toSummarize);
+						const summaryMsgs = await chunkAndSummarize(orgId, toSummarize);
 						if (toKeep.length > 0) {
 							toKeep[0] = {
 								...toKeep[0],
