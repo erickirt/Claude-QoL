@@ -6,6 +6,7 @@
 If this is a technical discussion, include any relevant technical details, code snippets, or explanations that were part of the conversation, maintaining information concerning only the latest version of any code discussed.
 If this is a writing or creative discussion, include sections for characters, plot points, setting info, etcetera.`;
 
+	const SUMMARY_MODEL = "claude-haiku-4-5-20251001";
 	let pendingFork = {
 		model: null,
 		includeAttachments: true,
@@ -13,6 +14,8 @@ If this is a writing or creative discussion, include sections for characters, pl
 		summaryPrompt: defaultSummaryPrompt,
 		originalSettings: null
 	};
+	const MAX_CHUNK_SIZE = 35000; // Tokens
+	const MIN_CHUNK_SIZE = 15000;  // Tokens
 
 	//#region UI elements creation
 	function createBranchButton() {
@@ -396,11 +399,17 @@ If this is a writing or creative discussion, include sections for characters, pl
 		for (const msg of messages) {
 			const text = formatMessageContent(msg);
 			totalChars += text.length;
+
+			// Add attachment content
+			if (msg.attachments) {
+				for (const att of msg.attachments) {
+					totalChars += att.extracted_content?.length || 0;
+				}
+			}
 		}
 
 		return Math.ceil(totalChars / 4);
 	}
-
 	function takeMessagesUpToTokens(messages, maxTokens) {
 		let totalTokens = 0;
 		let splitIndex = 0;
@@ -491,7 +500,68 @@ If this is a writing or creative discussion, include sections for characters, pl
 		return ClaudeConversation.extractMessageText(assistantMessage);
 	}
 
+	// Splits messages with too many attachments into multiple messages
+	function normalizeOversizedMessages(messages) {
+		const normalized = [];
+
+		for (const msg of messages) {
+			const msgTokens = estimateTokens([msg]);
+
+			if (msgTokens <= MAX_CHUNK_SIZE || !msg.attachments || msg.attachments.length <= 1) {
+				// Keep as-is: normal size, or can't split further
+				normalized.push(msg);
+				continue;
+			}
+
+			// Split attachments into chunks
+			const attachmentChunks = [];
+			let currentChunk = [];
+			let currentTokens = 0;
+
+			for (const attachment of msg.attachments) {
+				const attTokens = Math.ceil((attachment.extracted_content?.length || 0) / 4);
+
+				if (attTokens > MAX_CHUNK_SIZE) {
+					// Single attachment oversized, give it own message
+					if (currentChunk.length > 0) {
+						attachmentChunks.push(currentChunk);
+						currentChunk = [];
+						currentTokens = 0;
+					}
+					attachmentChunks.push([attachment]);
+				} else if (currentTokens + attTokens > MAX_CHUNK_SIZE) {
+					// Would exceed, start new chunk
+					attachmentChunks.push(currentChunk);
+					currentChunk = [attachment];
+					currentTokens = attTokens;
+				} else {
+					currentChunk.push(attachment);
+					currentTokens += attTokens;
+				}
+			}
+
+			if (currentChunk.length > 0) {
+				attachmentChunks.push(currentChunk);
+			}
+
+			// Create synthetic messages
+			for (let i = 0; i < attachmentChunks.length; i++) {
+				normalized.push({
+					...msg,
+					uuid: i === 0 ? msg.uuid : crypto.randomUUID(),
+					attachments: attachmentChunks[i],
+					files_v2: i === 0 ? msg.files_v2 : [],
+					files: i === 0 ? msg.files : []
+				});
+			}
+		}
+
+		return normalized;
+	}
+
 	async function chunkAndSummarize(orgId, messages) {
+		// First, normalize messages to avoid oversized ones
+		messages = normalizeOversizedMessages(messages);
 		// Collect ALL files/attachments/toolCalls from entire summarized section upfront
 		const allFiles = messages.flatMap(m => m.files_v2 || []);
 		const allAttachments = messages.flatMap(m => m.attachments || []);
@@ -502,6 +572,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 		// Calculate total tokens for progress tracking
 		const totalTokens = estimateTokens(messages);
 		let processedTokens = 0;
+
 		// Initial modal state
 		if (pendingFork.loadingModal) {
 			pendingFork.loadingModal.setContent(
@@ -512,33 +583,57 @@ If this is a writing or creative discussion, include sections for characters, pl
 		// Create ONE temp conversation for all summaries
 		const summaryConvoName = `Temp_Summary_${Date.now()}`;
 		const tempConversation = new ClaudeConversation(orgId);
-		await tempConversation.create(summaryConvoName, 'claude-haiku-4-5-20251001', null);
+		await tempConversation.create(summaryConvoName, SUMMARY_MODEL, null);
 
 		try {
+			// Calculate chunk sizes using recency-biased algorithm
+			let chunkSizes = [];
+			if (totalTokens <= MAX_CHUNK_SIZE) {
+				chunkSizes = [totalTokens];
+			} else {
+				const numFullChunks = Math.floor(totalTokens / MAX_CHUNK_SIZE);
+				const leftover = totalTokens - (numFullChunks * MAX_CHUNK_SIZE);
+
+				if (leftover === 0) {
+					chunkSizes = Array(numFullChunks).fill(MAX_CHUNK_SIZE);
+				} else if (leftover >= MIN_CHUNK_SIZE) {
+					chunkSizes = [...Array(numFullChunks).fill(MAX_CHUNK_SIZE), leftover];
+				} else {
+					const deficit = MIN_CHUNK_SIZE - leftover;
+					chunkSizes = [
+						...Array(numFullChunks - 1).fill(MAX_CHUNK_SIZE),
+						MAX_CHUNK_SIZE - deficit,
+						MIN_CHUNK_SIZE
+					];
+				}
+			}
+
 			const summaryTexts = [];
 			let remainingMessages = messages;
 
-			// Calculate how many chunks we need and target size per chunk
-			const numChunks = Math.ceil(totalTokens / 25000);
-			const targetTokensPerChunk = Math.ceil(totalTokens / numChunks);
-
-			// Get all summaries
-			while (remainingMessages.length > 0) {
-				const tokens = estimateTokens(remainingMessages);
+			// Process each chunk
+			for (let i = 0; i < chunkSizes.length; i++) {
+				const targetSize = chunkSizes[i];
+				const isLastChunk = i === chunkSizes.length - 1;
 
 				let chunk;
-				if (tokens > targetTokensPerChunk) {
-					const splitIndex = takeMessagesUpToTokens(remainingMessages, targetTokensPerChunk);
-					chunk = remainingMessages.slice(0, splitIndex);
-					remainingMessages = remainingMessages.slice(splitIndex);
-				} else {
+				if (isLastChunk) {
+					// Take everything remaining to avoid dropping messages
 					chunk = remainingMessages;
 					remainingMessages = [];
+				} else {
+					const splitIndex = takeMessagesUpToTokens(remainingMessages, targetSize);
+					chunk = remainingMessages.slice(0, splitIndex);
+					remainingMessages = remainingMessages.slice(splitIndex);
 				}
 
 
-				processedTokens += estimateTokens(chunk);
+				// Safety check, skip empty chunks
+				if (chunk.length === 0) {
+					continue;
+				}
 
+				processedTokens += estimateTokens(chunk);
 
 				// Generate summary
 				const summaryText = await generateSummaryForChunk(
@@ -603,6 +698,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 
 				syntheticMessages.push(userMessage, assistantMessage);
 			}
+
 			console.log('Generated synthetic summary messages:', JSON.stringify(syntheticMessages));
 			return syntheticMessages;
 		} finally {
@@ -673,7 +769,8 @@ If this is a writing or creative discussion, include sections for characters, pl
 						if (toKeep.length > 0) {
 							toKeep[0] = {
 								...toKeep[0],
-								parent_message_uuid: summaryMsgs[1].uuid  // Point to synthetic assistant
+								parent_message_uuid: summaryMsgs.at(-1).uuid
+								// Point to LAST synthetic assistant
 							};
 						}
 						messages = [...summaryMsgs, ...toKeep];
