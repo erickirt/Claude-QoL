@@ -517,13 +517,18 @@ If this is a writing or creative discussion, include sections for characters, pl
 		try {
 			const summaryTexts = [];
 			let remainingMessages = messages;
+
+			// Calculate how many chunks we need and target size per chunk
+			const numChunks = Math.ceil(totalTokens / 25000);
+			const targetTokensPerChunk = Math.ceil(totalTokens / numChunks);
+
 			// Get all summaries
 			while (remainingMessages.length > 0) {
 				const tokens = estimateTokens(remainingMessages);
 
 				let chunk;
-				if (tokens > 25000) {
-					const splitIndex = takeMessagesUpToTokens(remainingMessages, 25000);
+				if (tokens > targetTokensPerChunk) {
+					const splitIndex = takeMessagesUpToTokens(remainingMessages, targetTokensPerChunk);
 					chunk = remainingMessages.slice(0, splitIndex);
 					remainingMessages = remainingMessages.slice(splitIndex);
 				} else {
@@ -531,8 +536,9 @@ If this is a writing or creative discussion, include sections for characters, pl
 					remainingMessages = [];
 				}
 
-				// Update loading modal
-				const chunkTokens = estimateTokens(chunk);
+
+				processedTokens += estimateTokens(chunk);
+
 
 				// Generate summary
 				const summaryText = await generateSummaryForChunk(
@@ -541,8 +547,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 					summaryTexts
 				);
 
-				processedTokens += chunkTokens;
-
+				// Update loading modal
 				if (pendingFork.loadingModal) {
 					pendingFork.loadingModal.setContent(
 						createLoadingContent(`Summarizing conversation...\nCurrent progress: ${processedTokens.toLocaleString()} / ${totalTokens.toLocaleString()} tokens`)
