@@ -328,7 +328,50 @@
 		return true;
 	}
 
-	// Periodic URL checking
+	// File preview download
+
+	function addAttachmentDownloadButton() {
+		const closeButton = document.querySelector('[data-testid="close-file-preview"]');
+		if (!closeButton) return;
+
+		// Check for file size indicator
+		const sizeIndicators = document.querySelectorAll('.text-text-500 span');
+		const hasSize = Array.from(sizeIndicators).some(span =>
+			/KB|MB|bytes/.test(span.textContent)
+		);
+		if (!hasSize) return;
+
+		// Find header and check if button exists
+		const header = closeButton.closest('.sticky.flex.items-center.gap-1');
+		if (!header || header.querySelector('.file-preview-download-button')) return;
+
+		// Create button
+		const button = createClaudeButton(`
+		<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" viewBox="0 0 256 256">
+			<path d="M224,144v64a8,8,0,0,1-8,8H40a8,8,0,0,1-8-8V144a8,8,0,0,1,16,0v56H208V144a8,8,0,0,1,16,0Zm-101.66,5.66a8,8,0,0,0,11.32,0l40-40a8,8,0,0,0-11.32-11.32L136,124.69V32a8,8,0,0,0-16,0v92.69L93.66,98.34a8,8,0,0,0-11.32,11.32Z"></path>
+		</svg>
+	`, 'icon');
+
+		button.classList.add('file-preview-download-button', 'shrink-0', '-mr-2');
+		createClaudeTooltip(button, 'Download file');
+
+		button.onclick = () => {
+			const filename = header.querySelector('h2')?.textContent.trim() || 'download.txt';
+			const content = document.querySelector('.font-mono.whitespace-pre-wrap')?.textContent || '';
+
+			const blob = new Blob([content], { type: 'text/plain' });
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = filename;
+			a.click();
+			URL.revokeObjectURL(url);
+		};
+
+		header.insertBefore(button, closeButton);
+	}
+
+	// Periodic checking
 	//console.log(`${LOG_PREFIX} Setting up periodic URL checking`);
 	let lastUrl = '';
 	setInterval(() => {
@@ -343,6 +386,7 @@
 		if (currentUrl.includes('/project/')) {
 			addDownloadAllButton();
 		}
+		addAttachmentDownloadButton();
 	}, 1000);
 
 
