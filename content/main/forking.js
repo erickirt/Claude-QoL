@@ -703,7 +703,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 			console.log('Generated synthetic summary messages:', JSON.stringify(syntheticMessages));
 			return syntheticMessages;
 		} finally {
-			// await tempConversation.delete();
+			await tempConversation.delete();
 		}
 	}
 
