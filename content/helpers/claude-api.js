@@ -77,8 +77,24 @@ class ClaudeConversation {
 			throw new Error('Failed to send message');
 		}
 
-		// Wait for completion
-		await this.waitForCompletion();
+		// Just consume the stream until it's done
+		const reader = response.body.getReader();
+		const decoder = new TextDecoder();
+
+		try {
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) {
+					//console.log('Stream completed');
+					break;
+				}
+				// Optional: log chunks if you want to see what's coming through
+				//const chunk = decoder.decode(value, { stream: true });
+				//console.log('Chunk:', chunk);
+			}
+		} finally {
+			reader.releaseLock();
+		}
 
 		// Find assistant message created AFTER our request
 		let assistantMessage;
@@ -88,8 +104,8 @@ class ClaudeConversation {
 
 		while (!assistantMessage && attempts < maxAttempts) {
 			if (attempts > 0) {
-				console.log(`Assistant message not found or too old, waiting 5 seconds and retrying (attempt ${attempts}/${maxAttempts})...`);
-				await new Promise(r => setTimeout(r, 5000));
+				console.log(`Assistant message not found or too old, waiting 3 seconds and retrying (attempt ${attempts}/${maxAttempts})...`);
+				await new Promise(r => setTimeout(r, 3000));
 			}
 			messages = await this.getMessages(false, true);
 			assistantMessage = messages.find(msg =>
@@ -106,67 +122,6 @@ class ClaudeConversation {
 		}
 
 		return assistantMessage;
-	}
-
-	async waitForCompletion(maxMinutes = 3) {
-		const maxRetries = Math.floor((maxMinutes * 60) / 5);
-		const pollInterval = 5000;
-
-		// STEP 1: Wait until request enters pending state
-		let seenPending = false;
-		console.log('Waiting for request to enter pending state...');
-
-		for (let attempt = 0; attempt < 12 && !seenPending; attempt++) { // Max 1 minute to start
-			await new Promise(r => setTimeout(r, pollInterval));
-
-			const response = await fetch(
-				`/api/organizations/${this.orgId}/chat_conversations/${this.conversationId}/completion_status?poll=false`
-			);
-
-			if (!response.ok) {
-				throw new Error('Failed to check completion status');
-			}
-
-			const status = await response.json();
-
-			if (status.is_pending) {
-				seenPending = true;
-				console.log('Request is now pending, waiting for completion...');
-				break;
-			}
-		}
-
-		if (!seenPending) {
-			throw new Error('Request never entered pending state within 1 minute');
-		}
-
-		// STEP 2: Now wait for completion
-		for (let attempt = 0; attempt < maxRetries; attempt++) {
-			await new Promise(r => setTimeout(r, pollInterval));
-
-			console.log(`Checking completion status for ${this.conversationId} (attempt ${attempt + 1}/${maxRetries})...`);
-
-			const response = await fetch(
-				`/api/organizations/${this.orgId}/chat_conversations/${this.conversationId}/completion_status?poll=false`
-			);
-
-			if (!response.ok) {
-				throw new Error('Failed to check completion status');
-			}
-
-			const status = await response.json();
-
-			if (status.is_error) {
-				throw new Error(`Completion error: ${status.error_detail || status.error_code || 'Unknown error'}`);
-			}
-
-			if (!status.is_pending) {
-				console.log('Completion finished');
-				return;
-			}
-		}
-
-		throw new Error(`Completion timed out after ${maxMinutes} minutes`);
 	}
 
 	// Lazy load conversation data
