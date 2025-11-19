@@ -6,7 +6,6 @@
 If this is a technical discussion, include any relevant technical details, code snippets, or explanations that were part of the conversation, maintaining information concerning only the latest version of any code discussed.
 If this is a writing or creative discussion, include sections for characters, plot points, setting info, etcetera.`;
 
-	const SUMMARY_MODEL = "claude-haiku-4-5-20251001";
 	let pendingFork = {
 		model: null,
 		includeAttachments: true,
@@ -14,8 +13,10 @@ If this is a writing or creative discussion, include sections for characters, pl
 		summaryPrompt: defaultSummaryPrompt,
 		originalSettings: null
 	};
-	const MAX_CHUNK_SIZE = 35000; // Tokens
-	const MIN_CHUNK_SIZE = 15000;  // Tokens
+	const LAST_CHUNK_SIZE = 15000;     // Reserved for end (guaranteed recency bias)
+	const MAIN_TARGET_CHUNK = 25000;   // Target for front chunks
+	// Implicit MAX = 1.5x MAIN_TARGET due to rounding in chunking
+	const SUMMARY_MODEL = 'claude-haiku-4-5-20251001';
 
 	//#region UI elements creation
 	function createBranchButton() {
@@ -410,17 +411,21 @@ If this is a writing or creative discussion, include sections for characters, pl
 
 		return Math.ceil(totalChars / 4);
 	}
-	function takeMessagesUpToTokens(messages, maxTokens) {
+
+	function takeMessagesUpToTokens(messages, maxTokens, greedy = false) {
 		let totalTokens = 0;
 		let splitIndex = 0;
 
-		// Find the point where we'd exceed maxTokens
 		for (let i = 0; i < messages.length; i++) {
 			const msgTokens = estimateTokens([messages[i]]);
 
-			// Check if adding this message would exceed limit
 			if (totalTokens + msgTokens > maxTokens && splitIndex > 0) {
-				// Don't add this message
+				if (!greedy) {
+					break;  // Conservative: stop before exceeding
+				}
+				// Greedy: take this message anyway and stop
+				totalTokens += msgTokens;
+				splitIndex = i + 1;
 				break;
 			}
 
@@ -428,22 +433,17 @@ If this is a writing or creative discussion, include sections for characters, pl
 			splitIndex = i + 1;
 		}
 
-		// If we took nothing, take at least one message (avoid infinite loop)
+		// Always take at least one message
 		if (splitIndex === 0) {
 			splitIndex = 1;
 		}
 
-		// Adjust forward to ensure we split before a user message
-		while (splitIndex < messages.length && messages[splitIndex].sender !== 'human') {
-			splitIndex++;
-		}
-
-		// If adjustment went past the end, just take everything
-		if (splitIndex >= messages.length) {
-			return messages.length;
-		}
-
 		return splitIndex;
+	}
+
+	function takeMessagesFromEnd(messages, maxTokens, greedy = true) {
+		const reversed = messages.slice().reverse();
+		return takeMessagesUpToTokens(reversed, maxTokens, greedy);
 	}
 
 	async function generateSummaryForChunk(tempConversation, messages, priorSummaryTexts) {
@@ -510,9 +510,8 @@ If this is a writing or creative discussion, include sections for characters, pl
 		for (const msg of messages) {
 			const msgTokens = estimateTokens([msg]);
 
-			if (msgTokens <= MAX_CHUNK_SIZE || !msg.attachments || msg.attachments.length <= 1) {
+			if (msgTokens <= LAST_CHUNK_SIZE || !msg.attachments || msg.attachments.length <= 1) {
 				// Keep as-is: normal size, or can't split further
-				console.log('Message within size limits or has no/single attachment, keeping as is:', msg.uuid);
 				normalized.push(msg);
 				continue;
 			}
@@ -525,7 +524,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 			for (const attachment of msg.attachments) {
 				const attTokens = Math.ceil((attachment.extracted_content?.length || 0) / 4);
 				console.log(`Attachment tokens: ${attTokens} for attachment ${attachment.file_name}`);
-				if (attTokens > MAX_CHUNK_SIZE) {
+				if (attTokens > LAST_CHUNK_SIZE) {
 					// Single attachment oversized, give it own message
 					console.warn('Single attachment exceeds max chunk size, placing in its own message:', attachment.file_name);
 					if (currentChunk.length > 0) {
@@ -534,7 +533,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 						currentTokens = 0;
 					}
 					attachmentChunks.push([attachment]);
-				} else if (currentTokens + attTokens > MAX_CHUNK_SIZE) {
+				} else if (currentTokens + attTokens > LAST_CHUNK_SIZE) {
 					// Would exceed, start new chunk
 					console.log('Current chunk full, starting new chunk for attachment:', attachment.file_name);
 					attachmentChunks.push(currentChunk);
@@ -606,8 +605,9 @@ If this is a writing or creative discussion, include sections for characters, pl
 	}
 
 	async function chunkAndSummarize(orgId, messages) {
-		// First, normalize messages to avoid oversized ones
+		// Normalize messages first
 		messages = normalizeOversizedMessages(messages);
+
 		// Collect ALL files/attachments/toolCalls from entire summarized section upfront
 		const allFiles = messages.flatMap(m => m.files_v2 || []);
 		const allAttachments = messages.flatMap(m => m.attachments || []);
@@ -615,81 +615,37 @@ If this is a writing or creative discussion, include sections for characters, pl
 			m.content.filter(item => item.type === 'tool_use' || item.type === 'tool_result')
 		);
 
-		// Calculate total tokens for progress tracking
 		const totalTokens = estimateTokens(messages);
-		let processedTokens = 0;
 
 		// Initial modal state
 		if (pendingFork.loadingModal) {
 			pendingFork.loadingModal.setContent(
-				createLoadingContent(`Summarizing conversation...\nCurrent progress: ${processedTokens.toLocaleString()} / ${totalTokens.toLocaleString()} tokens`)
+				createLoadingContent(`Summarizing conversation...\nCurrent progress: 0 / ${totalTokens.toLocaleString()} tokens`)
 			);
 		}
 
-		// Create ONE temp conversation for all summaries
+		// Create temp conversation
 		const summaryConvoName = `Temp_Summary_${Date.now()}`;
 		const tempConversation = new ClaudeConversation(orgId);
 		await tempConversation.create(summaryConvoName, SUMMARY_MODEL, null);
 
 		try {
-			// Calculate chunk sizes using recency-biased algorithm
-			let chunkSizes = [];
-			if (totalTokens <= MAX_CHUNK_SIZE) {
-				chunkSizes = [totalTokens];
-			} else {
-				const numFullChunks = Math.floor(totalTokens / MAX_CHUNK_SIZE);
-				const leftover = totalTokens - (numFullChunks * MAX_CHUNK_SIZE);
+			// ===== PHASE 1: Calculate chunk boundaries (work backwards) =====
+			const chunks = calculateChunkBoundaries(messages);
 
-				if (leftover === 0) {
-					chunkSizes = Array(numFullChunks).fill(MAX_CHUNK_SIZE);
-				} else if (leftover >= MIN_CHUNK_SIZE) {
-					chunkSizes = [...Array(numFullChunks).fill(MAX_CHUNK_SIZE), leftover];
-				} else {
-					const deficit = MIN_CHUNK_SIZE - leftover;
-					chunkSizes = [
-						...Array(numFullChunks - 1).fill(MAX_CHUNK_SIZE),
-						MAX_CHUNK_SIZE - deficit,
-						MIN_CHUNK_SIZE
-					];
-				}
-			}
-
+			// ===== PHASE 2: Generate summaries (work forwards) =====
 			const summaryTexts = [];
-			let remainingMessages = messages;
-			console.log('Chunk sizes for summarization:', chunkSizes);
-			// Process each chunk
-			for (let i = 0; i < chunkSizes.length; i++) {
-				const targetSize = chunkSizes[i];
-				const isLastChunk = i === chunkSizes.length - 1;
+			let processedTokens = 0;
 
-				let chunk;
-				if (isLastChunk) {
-					// Take everything remaining to avoid dropping messages
-					chunk = remainingMessages;
-					remainingMessages = [];
-				} else {
-					const splitIndex = takeMessagesUpToTokens(remainingMessages, targetSize);
-					chunk = remainingMessages.slice(0, splitIndex);
-					remainingMessages = remainingMessages.slice(splitIndex);
-				}
-
-
-				// Safety check, skip empty chunks
-				if (chunk.length === 0) {
-					console.warn('Skipping empty chunk during summarization');
-					continue;
-				}
-
+			for (const chunk of chunks) {
 				processedTokens += estimateTokens(chunk);
-
-				// Generate summary
+				//console.log(`Processing chunk with ${chunk.length} messages, estimated tokens: ${estimateTokens(chunk)}. Total processed: ${processedTokens - estimateTokens(chunk)}`);
 				const summaryText = await generateSummaryForChunk(
 					tempConversation,
 					chunk,
 					summaryTexts
 				);
 
-				// Update loading modal
 				if (pendingFork.loadingModal) {
 					pendingFork.loadingModal.setContent(
 						createLoadingContent(`Summarizing conversation...\nCurrent progress: ${processedTokens.toLocaleString()} / ${totalTokens.toLocaleString()} tokens`)
@@ -699,17 +655,16 @@ If this is a writing or creative discussion, include sections for characters, pl
 				summaryTexts.push(summaryText);
 			}
 
-			// LOOP 2: Create synthetic message pairs from summaries
+			// ===== PHASE 3: Create synthetic message pairs =====
 			const syntheticMessages = [];
 
 			for (let i = 0; i < summaryTexts.length; i++) {
 				const summaryText = summaryTexts[i];
 				const isFirstPair = i === 0;
+				const isLastPair = i === summaryTexts.length - 1;
 
 				const userUuid = crypto.randomUUID();
 				const assistantUuid = crypto.randomUUID();
-
-				// Parent is either root or the last message in the array
 				const parentUuid = syntheticMessages.at(-1)?.uuid ?? "00000000-0000-4000-8000-000000000000";
 
 				const userMessage = {
@@ -738,8 +693,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 					created_at: new Date().toISOString(),
 				};
 
-				// Add tool calls to LAST assistant message only
-				if (i === summaryTexts.length - 1 && pendingFork.includeToolCalls && pendingFork.keepToolCallsFromSummarized) {
+				if (isLastPair && pendingFork.includeToolCalls && pendingFork.keepToolCallsFromSummarized) {
 					assistantMessage.content.push(...allToolCalls);
 				}
 
@@ -749,8 +703,70 @@ If this is a writing or creative discussion, include sections for characters, pl
 			console.log('Generated synthetic summary messages:', JSON.stringify(syntheticMessages));
 			return syntheticMessages;
 		} finally {
-			// await tempConversation.delete(); // TODO: Uncomment.
+			// await tempConversation.delete();
 		}
+	}
+
+	function calculateChunkBoundaries(messages) {
+		const totalTokens = estimateTokens(messages);
+
+		// Single chunk case
+		if (totalTokens < 2 * LAST_CHUNK_SIZE) {
+			return [messages];
+		}
+
+		let remaining = messages;
+
+		// Reserve last chunk (greedy, work from end)
+		let lastChunkCount = takeMessagesFromEnd(remaining, LAST_CHUNK_SIZE, true);
+
+		// Adjust to start on user message
+		while (lastChunkCount < remaining.length &&
+			remaining[remaining.length - lastChunkCount].sender !== 'human') {
+			lastChunkCount++;
+		}
+
+		if (lastChunkCount >= remaining.length) {
+			return [messages];  // Everything became last chunk
+		}
+
+		const lastChunk = remaining.slice(-lastChunkCount);
+		remaining = remaining.slice(0, -lastChunkCount);
+
+		// Calculate front chunks (work backwards through remaining)
+		const remainingTokens = estimateTokens(remaining);
+		const numFrontChunks = Math.max(1, Math.round(remainingTokens / MAIN_TARGET_CHUNK));
+		const targetPerChunk = Math.ceil(remainingTokens / numFrontChunks);
+
+		// Build chunks from end to beginning
+		const frontChunks = [];
+		for (let i = 0; i < numFrontChunks; i++) {
+			if (remaining.length === 0) break;
+
+			const takeCount = i === numFrontChunks - 1
+				? remaining.length  // Last front chunk takes everything left
+				: takeMessagesFromEnd(remaining, targetPerChunk, false);
+
+			// Adjust to start on user message (working backwards)
+			let adjustedTakeCount = takeCount;
+			while (adjustedTakeCount < remaining.length &&
+				remaining[remaining.length - adjustedTakeCount].sender !== 'human') {
+				adjustedTakeCount++;
+			}
+
+			if (adjustedTakeCount >= remaining.length) {
+				adjustedTakeCount = remaining.length;
+			}
+
+			const chunk = remaining.slice(-adjustedTakeCount);
+			remaining = remaining.slice(0, -adjustedTakeCount);
+
+			frontChunks.unshift(chunk);  // Add to beginning since we're working backwards
+		}
+
+		//console.log(`Calculated ${frontChunks.length} front chunks and 1 last chunk for summarization.`);
+		//console.log("Chunks:", [...frontChunks, lastChunk]);
+		return [...frontChunks, lastChunk];
 	}
 
 	//#endregion
