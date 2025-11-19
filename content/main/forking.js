@@ -14,7 +14,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 		originalSettings: null
 	};
 	const LAST_CHUNK_SIZE = 15000;     // Reserved for end (guaranteed recency bias)
-	const MAIN_TARGET_CHUNK = 25000;   // Target for front chunks
+	const MAIN_TARGET_CHUNK = 30000;   // Target for front chunks
 	// Implicit MAX = 1.5x MAIN_TARGET due to rounding in chunking
 	const SUMMARY_MODEL = 'claude-haiku-4-5-20251001';
 
