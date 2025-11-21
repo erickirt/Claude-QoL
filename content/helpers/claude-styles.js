@@ -2,6 +2,9 @@
 // Shared style utilities for Claude.ai extension
 // No IIFE - runs in shared global context
 
+// Add marker for usage tracker to know if it's installed:
+document.documentElement.setAttribute('data-claude-qol-installed', 'true');
+
 const CLAUDE_CLASSES = {
 	// Buttons
 	ICON_BTN: 'inline-flex items-center justify-center relative shrink-0 ring-offset-2 ring-offset-bg-300 ring-accent-main-100 focus-visible:outline-none focus-visible:ring-1 disabled:pointer-events-none disabled:opacity-50 disabled:shadow-none disabled:drop-shadow-none text-text-200 border-transparent transition-colors font-styrene active:bg-bg-400 hover:bg-bg-500/40 hover:text-text-100 h-9 w-9 rounded-md active:scale-95',

@@ -9,14 +9,6 @@ if (chrome.action) {
 	});
 }
 
-
-chrome.runtime.onMessageExternal.addListener(
-	(request, sender, sendResponse) => {
-		if (request.ping) sendResponse({ installed: true });
-	}
-);
-
-
 // Handle GDPR export download
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 	if (message.type === 'DOWNLOAD_GDPR_EXPORT') {
