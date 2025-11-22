@@ -7,7 +7,7 @@ document.documentElement.setAttribute('data-claude-qol-installed', 'true');
 
 const CLAUDE_CLASSES = {
 	// Buttons
-	ICON_BTN: 'inline-flex items-center justify-center relative shrink-0 ring-offset-2 ring-offset-bg-300 ring-accent-main-100 focus-visible:outline-none focus-visible:ring-1 disabled:pointer-events-none disabled:opacity-50 disabled:shadow-none disabled:drop-shadow-none text-text-200 border-transparent transition-colors font-styrene active:bg-bg-400 hover:bg-bg-500/40 hover:text-text-100 h-9 w-9 rounded-md active:scale-95',
+	ICON_BTN: 'inline-flex items-center justify-center relative shrink-0 ring-offset-2 ring-offset-bg-300 ring-accent-main-100 focus-visible:outline-none focus-visible:ring-1 disabled:pointer-events-none disabled:opacity-50 disabled:shadow-none disabled:drop-shadow-none text-text-200 border-transparent transition-colors font-styrene active:bg-bg-400 h-9 w-9 rounded-md active:scale-95',
 	BTN_PRIMARY: 'inline-flex items-center justify-center px-4 py-2 font-base-bold bg-text-000 text-bg-000 rounded hover:bg-text-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors min-w-[5rem] h-9',
 	BTN_SECONDARY: 'inline-flex items-center justify-center px-4 py-2 hover:bg-bg-500/40 rounded transition-colors min-w-[5rem] h-9 text-text-000 font-base-bold border-0.5 border-border-200',
 
@@ -381,6 +381,14 @@ function createClaudeButton(content, variant = 'primary', onClick = null, conten
 		case 'icon':
 			button.className = CLAUDE_CLASSES.ICON_BTN;
 			contentIsHTML = true; // Always use innerHTML for icon variant
+
+			// Add hover effect directly
+			button.addEventListener('mouseenter', () => {
+				button.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
+			});
+			button.addEventListener('mouseleave', () => {
+				button.style.backgroundColor = '';
+			});
 			break;
 		default:
 			button.className = CLAUDE_CLASSES.BTN_PRIMARY;
@@ -1058,6 +1066,7 @@ function addMessageButtonWithPriority(buttonGenerator, buttonClass) {
 	const MESSAGE_BUTTON_PRIORITY = [
 		'tts-speak-button',
 		'fork-button',
+		'bookmark-button'
 	];
 
 	const messages = document.querySelectorAll('.font-claude-response');
