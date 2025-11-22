@@ -12,7 +12,7 @@ const CLAUDE_CLASSES = {
 	BTN_SECONDARY: 'inline-flex items-center justify-center px-4 py-2 hover:bg-bg-500/40 rounded transition-colors min-w-[5rem] h-9 text-text-000 font-base-bold border-0.5 border-border-200',
 
 	// Modal
-	MODAL_BACKDROP: 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50',
+	MODAL_BACKDROP: 'fixed inset-0 flex items-center justify-center z-50',
 	MODAL_CONTAINER: 'bg-bg-100 rounded-lg p-6 shadow-xl max-w-md w-full mx-4 border border-border-300',
 	MODAL_HEADING: 'text-lg font-semibold mb-4 text-text-100',
 
@@ -67,6 +67,11 @@ class ClaudeModal {
 	_buildModal() {
 		this.backdrop = document.createElement('div');
 		this.backdrop.className = CLAUDE_CLASSES.MODAL_BACKDROP;
+		this.backdrop.style.position = 'fixed';
+		this.backdrop.style.inset = '0';
+		this.backdrop.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
+		this.backdrop.style.display = 'none';
+		this.backdrop.style.zIndex = '50';
 		this.backdrop.style.display = 'none';
 
 		this.modal = document.createElement('div');
