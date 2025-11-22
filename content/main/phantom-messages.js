@@ -205,7 +205,6 @@ function injectPhantomMessages(data, phantomMessages) {
 			citations: [],
 			...item
 		}));
-		console.log('Injecting phantom message:', JSON.stringify(completeMsg.content));
 
 
 		completeMsg.content.forEach(item => {
@@ -213,7 +212,6 @@ function injectPhantomMessages(data, phantomMessages) {
 				item.text = item.text + '\n\n' + PHANTOM_MARKER;
 			}
 		});
-		//console.log('Injecting phantom message:', JSON.stringify(completeMsg.content));
 
 		return completeMsg;
 	});
@@ -316,15 +314,20 @@ function extractAndStoreUUIDs() {
 	allMessages.forEach(container => {
 		const textContent = container.textContent || '';
 
-		// Look for UUID marker
-		const markerStart = textContent.indexOf(UUID_MARKER_PREFIX);
+		// Look for UUID marker using lastIndexOf
+		const markerStart = textContent.lastIndexOf(UUID_MARKER_PREFIX);
 		if (markerStart !== -1) {
 			const uuidStart = markerStart + UUID_MARKER_PREFIX.length;
 			const uuidEnd = textContent.indexOf(UUID_MARKER_SUFFIX, uuidStart);
 
 			if (uuidEnd !== -1) {
 				const uuid = textContent.substring(uuidStart, uuidEnd);
-				container.setAttribute('data-message-uuid', uuid);
+
+				// Put UUID on parent container instead of the message element itself
+				const parentContainer = container?.parentElement;
+				if (parentContainer) {
+					parentContainer.setAttribute('data-message-uuid', uuid);
+				}
 
 				// Remove the marker from DOM
 				removeUUIDMarkerFromElement(container);
