@@ -519,8 +519,55 @@
 			});
 		});
 	}
-
 	// #endregion
+
+	// #region MESSAGE BOOKMARK
+	function createBookmarkButton() {
+		const svgContent = `
+        <div class="flex items-center justify-center" style="width: 16px; height: 16px;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0" aria-hidden="true">
+                <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+            </svg>
+        </div>
+    `;
+
+		const button = createClaudeButton(svgContent, 'icon');
+		button.type = 'button';
+		button.setAttribute('data-state', 'closed');
+		button.setAttribute('aria-label', 'Bookmark this message');
+
+		button.classList.remove('h-9', 'w-9');
+		button.classList.add('h-8', 'w-8');
+
+		createClaudeTooltip(button, 'Bookmark this message');
+
+		button.onclick = async (e) => {
+			e.preventDefault();
+			e.stopPropagation();
+
+			// Get the message UUID from the message element
+			const messageContainer = e.target.closest('[data-message-uuid]');
+			const messageUuid = messageContainer?.dataset.messageUuid;
+
+			if (!messageUuid) {
+				showClaudeAlert('Error', 'Could not find message UUID');
+				return;
+			}
+
+			const conversationId = getConversationId();
+
+			try {
+				await showNameInputModal(conversationId, messageUuid);
+				showClaudeAlert('Success', 'Bookmark added!');
+			} catch (error) {
+				// User cancelled, do nothing
+			}
+		};
+
+		return button;
+	}
+	// #endregion
+
 	// #region  INITIALIZATION
 	// ======== INJECT CSS ========
 	function injectTreeStyles() {
@@ -581,6 +628,7 @@
 		// Add navigation button to top right
 		setInterval(() => {
 			tryAddTopRightButton("navigation-button", createNavigationButton, 'Navigation');
+			addMessageButtonWithPriority(createBookmarkButton, 'bookmark-button');
 		}, 1000);
 
 		setInterval(addUserNavigationButtons, 1000);
