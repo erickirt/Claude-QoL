@@ -4,6 +4,8 @@
 const PHANTOM_PREFIX = 'phantom_messages_';
 const OLD_FORK_PREFIX = 'fork_history_';
 const PHANTOM_MARKER = '====PHANTOM_MESSAGE====';
+const UUID_MARKER_PREFIX = '====UUID:';
+const UUID_MARKER_SUFFIX = '====';
 
 // ==== STORAGE FUNCTIONS (async, use IndexedDB via messages) ====
 async function storePhantomMessages(conversationId, messages) {
@@ -108,6 +110,10 @@ window.fetch = async (...args) => {
 		url = input.url;
 	}
 
+	if (url && url.includes('skip_uuid_injection=true')) {
+		return originalFetch(...args);
+	}
+
 	// Check if this is a conversation data request
 	if (url &&
 		url.includes('/chat_conversations/') &&
@@ -120,15 +126,17 @@ window.fetch = async (...args) => {
 
 		if (conversationId) {
 			const response = await originalFetch(...args);
-			const originalData = await response.json();
+			const conversationData = await response.json();
 
 			const phantomMessages = await getPhantomMessages(conversationId);
 
 			if (phantomMessages && phantomMessages.length > 0) {
-				injectPhantomMessages(originalData, phantomMessages);
+				injectPhantomMessages(conversationData, phantomMessages);
 			}
 
-			return new Response(JSON.stringify(originalData), {
+			injectUUIDMarkers(conversationData);
+
+			return new Response(JSON.stringify(conversationData), {
 				status: response.status,
 				statusText: response.statusText,
 				headers: response.headers
@@ -197,12 +205,15 @@ function injectPhantomMessages(data, phantomMessages) {
 			citations: [],
 			...item
 		}));
+		console.log('Injecting phantom message:', JSON.stringify(completeMsg.content));
+
 
 		completeMsg.content.forEach(item => {
 			if (item.text !== undefined) {
 				item.text = item.text + '\n\n' + PHANTOM_MARKER;
 			}
 		});
+		//console.log('Injecting phantom message:', JSON.stringify(completeMsg.content));
 
 		return completeMsg;
 	});
@@ -222,6 +233,29 @@ function injectPhantomMessages(data, phantomMessages) {
 
 	data.chat_messages = [...phantomMessages, ...data.chat_messages];
 }
+
+function injectUUIDMarkers(data) {
+	const assistantMessages = data.chat_messages.filter(msg => msg.sender !== 'human');
+
+	assistantMessages.forEach(msg => {
+
+		// Find the LAST text item instead of first
+		let lastTextIndex = -1;
+		for (let i = msg.content.length - 1; i >= 0; i--) {
+			if (msg.content[i].text !== undefined) {
+				lastTextIndex = i;
+				break;
+			}
+		}
+
+		if (lastTextIndex !== -1) {
+			const item = msg.content[lastTextIndex];
+			const uuidMarker = UUID_MARKER_PREFIX + msg.uuid + UUID_MARKER_SUFFIX;
+			item.text = item.text + '\n\n' + uuidMarker;
+		}
+	});
+}
+
 
 // Listen for messages from ISOLATED world
 window.addEventListener('message', (event) => {
@@ -245,7 +279,7 @@ function stylePhantomMessages() {
 
 		if (hasMarker) {
 			container.setAttribute('data-phantom-styled', 'true');
-			removeMarkerFromElement(container);
+			removePhantomMarkerFromElement(container);
 		}
 
 		if (hasMarker || isMarkedPhantom) {
@@ -261,7 +295,7 @@ function stylePhantomMessages() {
 	});
 }
 
-function removeMarkerFromElement(element) {
+function removePhantomMarkerFromElement(element) {
 	const paragraphs = element.querySelectorAll('p');
 
 	paragraphs.forEach(p => {
@@ -275,4 +309,57 @@ function removeMarkerFromElement(element) {
 	});
 }
 
-setInterval(stylePhantomMessages, 1000);
+// Add new function to extract and store UUIDs
+function extractAndStoreUUIDs() {
+	const { allMessages } = getUIMessages();
+
+	allMessages.forEach(container => {
+		const textContent = container.textContent || '';
+
+		// Look for UUID marker
+		const markerStart = textContent.indexOf(UUID_MARKER_PREFIX);
+		if (markerStart !== -1) {
+			const uuidStart = markerStart + UUID_MARKER_PREFIX.length;
+			const uuidEnd = textContent.indexOf(UUID_MARKER_SUFFIX, uuidStart);
+
+			if (uuidEnd !== -1) {
+				const uuid = textContent.substring(uuidStart, uuidEnd);
+				container.setAttribute('data-message-uuid', uuid);
+
+				// Remove the marker from DOM
+				removeUUIDMarkerFromElement(container);
+			}
+		}
+	});
+}
+
+function removeUUIDMarkerFromElement(element) {
+	const paragraphs = element.querySelectorAll('p');
+
+	paragraphs.forEach((p, index) => {
+		const text = p.textContent;
+		if (text.includes(UUID_MARKER_PREFIX)) {
+			// Use lastIndexOf to get the LAST occurrence (the actual injected marker)
+			const markerStart = text.lastIndexOf(UUID_MARKER_PREFIX);
+			// Search for suffix AFTER the prefix
+			const searchFrom = markerStart + UUID_MARKER_PREFIX.length;
+			const markerEnd = text.indexOf(UUID_MARKER_SUFFIX, searchFrom);
+
+			if (markerEnd !== -1) {
+				const beforeMarker = text.substring(0, markerStart);
+				const afterMarker = text.substring(markerEnd + UUID_MARKER_SUFFIX.length);
+				const newText = beforeMarker + afterMarker;
+				p.textContent = newText;
+				if (p.textContent.trim() === '') {
+					p.style.display = 'none';
+				}
+			}
+		}
+	});
+}
+
+
+setInterval(() => {
+	stylePhantomMessages();
+	extractAndStoreUUIDs();
+}, 300);

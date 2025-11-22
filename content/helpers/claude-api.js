@@ -128,7 +128,7 @@ class ClaudeConversation {
 	async getData(tree = false, forceRefresh = false) {
 		if (!this.conversationData || forceRefresh || (tree && !this.conversationData.chat_messages)) {
 			const response = await fetch(
-				`/api/organizations/${this.orgId}/chat_conversations/${this.conversationId}?tree=${tree}&rendering_mode=messages&render_all_tools=true`
+				`/api/organizations/${this.orgId}/chat_conversations/${this.conversationId}?tree=${tree}&rendering_mode=messages&render_all_tools=true&skip_uuid_injection=true`
 			);
 			if (!response.ok) {
 				throw new Error('Failed to get conversation data');
@@ -607,7 +607,7 @@ function getConversationId() {
 	return match ? match[1] : null;
 }
 
-CLAUDE_MODELS = [
+const CLAUDE_MODELS = [
 	{ value: 'claude-sonnet-4-5-20250929', label: 'Sonnet 4.5' },
 	{ value: 'claude-opus-4-1-20250805', label: 'Opus 4.1' },
 	{ value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
@@ -618,4 +618,5 @@ CLAUDE_MODELS = [
 	{ value: 'claude-3-5-haiku-20241022', label: 'Haiku 3.5' }
 ]
 
-DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-5-20250929';
+const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-5-20250929';
+const FAST_MODEL = 'claude-haiku-4-5-20251001';
