@@ -91,7 +91,7 @@
 			endpoint: "anthropic",
 			conversationId: conversationId,
 			options: {
-				model: conversationData.model ?? "claude-3-5-sonnet-latest"
+				model: conversationData.model ?? DEFAULT_CLAUDE_MODEL
 			},
 			messages: processedMessages
 		}, null, 2);
@@ -465,7 +465,7 @@
 			};
 
 			window.addEventListener('message', handler);
-			
+
 			window.postMessage({
 				type: 'STORE_PHANTOM_MESSAGES',
 				conversationId,

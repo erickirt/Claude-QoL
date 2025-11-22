@@ -617,3 +617,5 @@ CLAUDE_MODELS = [
 	{ value: 'claude-3-opus-20240229', label: 'Opus 3' },
 	{ value: 'claude-3-5-haiku-20241022', label: 'Haiku 3.5' }
 ]
+
+DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-5-20250929';
