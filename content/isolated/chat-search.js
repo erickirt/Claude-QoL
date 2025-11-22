@@ -182,11 +182,9 @@
 
 		modal.addCancel('Cancel');
 		modal.addConfirm('Go to Message', async () => {
-			// Remove the display ellipses before storing
-			const textToStore = result.matched_text.replace(/^\.\.\./, '').replace(/\.\.\.$/, '');
-			const searchSnippet = simplifyText(textToStore);
-			console.log('Storing text to find:', searchSnippet);
-			sessionStorage.setItem('text_to_find', searchSnippet);
+			// Store the message UUID instead of text
+			console.log('Storing message UUID to find:', result.matched_message_id);
+			sessionStorage.setItem('message_uuid_to_find', result.matched_message_id);
 
 			const longestLeaf = conversation.findLongestLeaf(result.matched_message_id);
 			await conversation.setCurrentLeaf(longestLeaf.leafId);
@@ -451,10 +449,10 @@
 	}
 
 	// ======== SCROLL TO TEXT ========
-	function scrollToStoredText() {
-		const textToFind = sessionStorage.getItem('text_to_find');
-		console.log('scrollToStoredText called, textToFind:', textToFind);
-		if (!textToFind) return;
+	function scrollToMessageByUuid() {
+		const messageUuid = sessionStorage.getItem('message_uuid_to_find');
+		console.log('scrollToMessageByUuid called, messageUuid:', messageUuid);
+		if (!messageUuid) return;
 
 		const maxRetries = 20;
 		const retryDelay = 500;
@@ -462,38 +460,27 @@
 
 		function attemptScroll() {
 			attempts++;
-			console.log(`Attempt ${attempts} to find text...`);
-			console.log('Looking for:', textToFind);
+			console.log(`Attempt ${attempts} to find message with UUID: ${messageUuid}`);
 
-			const { allMessages: messages } = getUIMessages();
-			console.log('Found', messages.length, 'message elements');
+			// Look for the element with matching data-message-uuid
+			const messageElement = document.querySelector(`[data-message-uuid="${messageUuid}"]`);
 
-			for (const node of messages) {
-				// Get only the actual message content from p and pre tags
-				const contentElements = node.querySelectorAll('p, pre');
-				const nodeText = Array.from(contentElements)
-					.map(el => el.textContent)
-					.join(' ');
-				const simplifiedText = simplifyText(nodeText);
-				if (simplifiedText.includes("complexity")) console.log(simplifiedText);
+			if (messageElement) {
+				console.log('FOUND IT!');
+				sessionStorage.removeItem('message_uuid_to_find');
 
-				if (simplifiedText.includes(textToFind) || fuzzyMatch(textToFind, simplifiedText)) {
-					console.log('FOUND IT!');
-					sessionStorage.removeItem('text_to_find');
+				messageElement.scrollIntoView({
+					behavior: 'smooth',
+					block: 'center'
+				});
 
-					node.scrollIntoView({
-						behavior: 'smooth',
-						block: 'center'
-					});
+				messageElement.style.transition = 'background-color 0.3s';
+				messageElement.style.backgroundColor = '#2c84db4d';
+				setTimeout(() => {
+					messageElement.style.backgroundColor = '';
+				}, 4000);
 
-					node.style.transition = 'background-color 0.3s';
-					node.style.backgroundColor = '#2c84db4d';
-					setTimeout(() => {
-						node.style.backgroundColor = '';
-					}, 4000);
-
-					return true;
-				}
+				return true;
 			}
 
 			console.log('Not found in this attempt');
@@ -501,7 +488,7 @@
 				setTimeout(attemptScroll, retryDelay);
 			} else {
 				console.log('Giving up after', maxRetries, 'attempts');
-				sessionStorage.removeItem('text_to_find');
+				sessionStorage.removeItem('message_uuid_to_find');
 			}
 		}
 
@@ -511,7 +498,7 @@
 	// ======== INITIALIZATION ========
 	function initialize() {
 		// Existing scroll check
-		setTimeout(scrollToStoredText, 1000);
+		setTimeout(scrollToMessageByUuid, 1000);
 
 		// Add search button to top right
 		setInterval(() => {
