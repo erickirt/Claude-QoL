@@ -16,7 +16,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 	const LAST_CHUNK_SIZE = 15000;     // Reserved for end (guaranteed recency bias)
 	const MAIN_TARGET_CHUNK = 30000;   // Target for front chunks
 	// Implicit MAX = 1.5x MAIN_TARGET due to rounding in chunking
-	
+
 
 	//#region UI elements creation
 	function createBranchButton() {
@@ -42,14 +42,23 @@ If this is a writing or creative discussion, include sections for characters, pl
 			e.preventDefault();
 			e.stopPropagation();
 
-			const modal = await createConfigModal(button);
+			// Get message UUID directly from DOM
+			const messageContainer = e.target.closest('[data-message-uuid]');
+			const messageUuid = messageContainer?.dataset.messageUuid;
+
+			if (!messageUuid) {
+				showClaudeAlert('Error', 'Could not find message UUID');
+				return;
+			}
+
+			const modal = await createConfigModal(messageUuid);
 			modal.show();
 		};
 
 		return button;
 	}
 
-	async function createConfigModal(forkButton) {
+	async function createConfigModal(messageUuid) {
 		const content = document.createElement('div');
 
 		// Model select
@@ -162,9 +171,9 @@ If this is a writing or creative discussion, include sections for characters, pl
 			pendingFork.keepToolCallsFromSummarized = keepToolCallsFromSummarizedToggle.input.checked;
 
 			modal.destroy();
-			await forkConversationClicked(forkButton);
+			await forkConversationClicked(messageUuid); // Pass UUID directly
 
-			return false; // Modal already destroyed
+			return false;
 		});
 
 		// Fetch account settings
@@ -187,53 +196,108 @@ If this is a writing or creative discussion, include sections for characters, pl
 	}
 	//#endregion
 
-	async function forkConversationClicked(forkButton) {
+	async function forkConversationClicked(messageUuid) {
 		const loadingModal = createLoadingModal('Preparing to fork conversation...');
 		loadingModal.show();
-
 		pendingFork.loadingModal = loadingModal;
 
 		try {
 			const conversationId = getConversationId();
-			console.log('Forking conversation', conversationId, 'with model', pendingFork.model);
+			const orgId = getOrgId();
 
-			loadingModal.setContent(createLoadingContent('Triggering fork process...'));
+			console.log('Forking conversation', conversationId, 'from message', messageUuid, 'with model', pendingFork.model);
 
-			// Find and click the retry button
-			const buttonGroup = forkButton.closest('.justify-between');
-			const retryButton = Array.from(buttonGroup.querySelectorAll('button'))
-				.reverse()
-				.find(button => button.textContent.trim() !== '');
+			loadingModal.setContent(createLoadingContent('Getting conversation messages...'));
 
-			if (retryButton) {
-				retryButton.dispatchEvent(new PointerEvent('pointerdown', {
-					bubbles: true,
-					cancelable: true,
-					view: window,
-					pointerType: 'mouse'
-				}));
+			let { conversation, conversationData, messages } =
+				await getConversationMessages(orgId, conversationId, messageUuid);
 
-				await new Promise(resolve => setTimeout(resolve, 300));
+			const chatName = conversationData.name;
+			const projectUuid = conversationData.project?.uuid || null;
 
-				const withNoChangesOption = Array.from(document.querySelectorAll('[role="menuitem"]'))
-					.find(element => element.textContent.includes('With no changes'));
+			// Apply summary if needed
+			if (pendingFork.rawTextPercentage < 100) {
+				loadingModal.setContent(createLoadingContent('Generating conversation summary...'));
 
-				if (withNoChangesOption) {
-					console.log('Detected retry dropdown, clicking "With no changes"');
-					withNoChangesOption.click();
-				} else {
-					console.log('No dropdown detected, assuming direct retry');
-					retryButton.click();
+				let split = Math.ceil(messages.length * pendingFork.rawTextPercentage / 100);
+
+				// Adjust split to ensure we cut before a user message
+				while (split < messages.length && messages[split].sender !== 'human') {
+					split++;
 				}
-			} else {
-				throw new Error('Could not find retry button');
+
+				if (split >= messages.length) {
+					split = 0;
+				}
+
+				const toSummarize = messages.slice(0, messages.length - split);
+				const toKeep = messages.slice(messages.length - split);
+
+				if (toSummarize.length > 0) {
+					const summaryMsgs = await chunkAndSummarize(orgId, toSummarize);
+					if (toKeep.length > 0) {
+						toKeep[0] = {
+							...toKeep[0],
+							parent_message_uuid: summaryMsgs.at(-1).uuid
+						};
+					}
+					messages = [...summaryMsgs, ...toKeep];
+				}
 			}
+
+			loadingModal.setContent(createLoadingContent('Creating forked conversation...'));
+
+			// Clean up messages based on toggles
+			if (!pendingFork.includeAttachments) {
+				messages = messages.map(msg => ({
+					...msg,
+					files_v2: [],
+					files: [],
+					attachments: []
+				}));
+			}
+
+			if (!pendingFork.includeToolCalls) {
+				messages = messages.map(msg => ({
+					...msg,
+					content: msg.content.filter(item =>
+						item.type !== 'tool_use' && item.type !== 'tool_result'
+					)
+				}));
+			}
+
+			const newConversationId = await createFork(
+				orgId,
+				messages,
+				chatName,
+				projectUuid
+			);
+
+			loadingModal.setContent(createLoadingContent('Fork complete! Redirecting...'));
+			console.log('Forked conversation created:', newConversationId);
+
+			setTimeout(() => {
+				if (newConversationId) window.location.href = `/chat/${newConversationId}`;
+			}, 100);
+
 		} catch (error) {
 			console.error('Failed to fork conversation:', error);
 			loadingModal.setTitle('Error');
 			loadingModal.setContent(`Failed to fork conversation: ${error.message}`);
 			loadingModal.clearButtons();
 			loadingModal.addConfirm('OK');
+		} finally {
+			if (pendingFork.originalSettings) {
+				await updateAccountSettings(pendingFork.originalSettings);
+			}
+			pendingFork = {
+				model: null,
+				includeAttachments: true,
+				rawTextPercentage: 100,
+				summaryPrompt: defaultSummaryPrompt,
+				originalSettings: null,
+				loadingModal: null
+			};
 		}
 	}
 
@@ -313,7 +377,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 		});
 	}
 
-	async function createFork(orgId, messages, chatName, projectUuid, styleData) {
+	async function createFork(orgId, messages, chatName, projectUuid) {
 		if (!chatName || chatName.trim() === '') chatName = "Untitled";
 		const newName = `Fork of ${chatName}`;
 		const model = pendingFork.model;
@@ -366,8 +430,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 				model: model,
 				attachments: finalAttachments,
 				files: finalFiles,
-				syncSources: [],
-				personalizedStyles: styleData
+				syncSources: []
 			}
 		);
 
@@ -769,146 +832,6 @@ If this is a writing or creative discussion, include sections for characters, pl
 		return [...frontChunks, lastChunk];
 	}
 
-	//#endregion
-
-	//#region Fetch patching
-	const originalFetch = window.fetch;
-	window.fetch = async (...args) => {
-		const [input, config] = args;
-
-		let url = undefined
-		if (input instanceof URL) {
-			url = input.href
-		} else if (typeof input === 'string') {
-			url = input
-		} else if (input instanceof Request) {
-			url = input.url
-		}
-
-		if (url && url.includes('/retry_completion') && pendingFork.model) {
-			console.log('Intercepted retry request');
-			const bodyJSON = JSON.parse(config?.body);
-			const messageID = bodyJSON?.parent_message_uuid;
-			const urlParts = url.split('/');
-			const orgId = urlParts[urlParts.indexOf('organizations') + 1];
-			const conversationId = urlParts[urlParts.indexOf('chat_conversations') + 1];
-			const styleData = bodyJSON?.personalized_styles;
-			const loadingModal = pendingFork.loadingModal;
-
-			try {
-				if (loadingModal) {
-					loadingModal.setContent(createLoadingContent('Getting conversation messages...'));
-				}
-
-				let { conversation, conversationData, messages } =
-					await getConversationMessages(orgId, conversationId, messageID);
-
-				const chatName = conversationData.name;
-				const projectUuid = conversationData.project?.uuid || null;
-
-				// Apply summary if needed
-				if (pendingFork.rawTextPercentage < 100) {
-					if (loadingModal) {
-						loadingModal.setContent(createLoadingContent('Generating conversation summary...'));
-					}
-
-					let split = Math.ceil(messages.length * pendingFork.rawTextPercentage / 100);
-
-					// Adjust split to ensure we cut before a user message
-					while (split < messages.length && messages[split].sender !== 'human') {
-						split++;
-					}
-
-					// If we went past the end, just keep everything
-					if (split >= messages.length) {
-						split = 0; // Don't summarize anything
-					}
-
-					const toSummarize = messages.slice(0, messages.length - split);
-					const toKeep = messages.slice(messages.length - split);
-
-					if (toSummarize.length > 0) {
-						const summaryMsgs = await chunkAndSummarize(orgId, toSummarize);
-						if (toKeep.length > 0) {
-							toKeep[0] = {
-								...toKeep[0],
-								parent_message_uuid: summaryMsgs.at(-1).uuid
-								// Point to LAST synthetic assistant
-							};
-						}
-						messages = [...summaryMsgs, ...toKeep];
-					}
-				}
-
-				if (loadingModal) {
-					loadingModal.setContent(createLoadingContent('Creating forked conversation...'));
-				}
-
-				// Now clean up the entire messages array based on toggles
-				if (!pendingFork.includeAttachments) {
-					messages = messages.map(msg => ({
-						...msg,
-						files_v2: [],
-						files: [],
-						attachments: []
-					}));
-				}
-
-				if (!pendingFork.includeToolCalls) {
-					messages = messages.map(msg => ({
-						...msg,
-						content: msg.content.filter(item =>
-							item.type !== 'tool_use' && item.type !== 'tool_result'
-						)
-					}));
-				}
-
-
-				const newConversationId = await createFork(
-					orgId,
-					messages,
-					chatName,
-					projectUuid,
-					styleData
-				);
-
-				if (loadingModal) {
-					loadingModal.setContent(createLoadingContent('Fork complete! Redirecting...'));
-				}
-
-				console.log('Forked conversation created:', newConversationId);
-				setTimeout(() => {
-					if (newConversationId) window.location.href = `/chat/${newConversationId}`;
-				}, 100);
-
-			} catch (error) {
-				console.error('Failed to fork conversation:', error);
-
-				if (loadingModal) {
-					loadingModal.setTitle('Error');
-					loadingModal.setContent(`Failed to fork conversation: ${error.message}`);
-					loadingModal.clearButtons();
-					loadingModal.addConfirm('OK');
-				}
-			} finally {
-				if (pendingFork.originalSettings) {
-					await updateAccountSettings(pendingFork.originalSettings);
-				}
-				pendingFork = {
-					model: null,
-					includeAttachments: true,
-					rawTextPercentage: 100,
-					summaryPrompt: defaultSummaryPrompt,
-					originalSettings: null,
-					loadingModal: null
-				};
-			}
-
-			return new Response(JSON.stringify({ success: true }));
-		}
-
-		return originalFetch(...args);
-	};
 	//#endregion
 
 	setInterval(addBranchButtons, 3000);
