@@ -1110,10 +1110,10 @@
 
 		return {
 			enabled: result.tts_enabled || false,
-			provider: result.tts_provider || 'elevenlabs',  // NEW - default to elevenlabs
+			provider: result.tts_provider || 'elevenlabs',  // Default to elevenlabs
 			apiKey: result.tts_apiKey || '',
 			voice: result.tts_voice || '',
-			model: result.tts_model || 'eleven_multilingual_v2',
+			model: result.tts_model || 'eleven_flash_v2_5',	// Default to 11labs fast model
 			autoSpeak: result.tts_autoSpeak || false
 		};
 	}

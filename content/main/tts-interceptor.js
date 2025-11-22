@@ -133,7 +133,7 @@
 				const orgId = getOrgId();
 				const conversation = new ClaudeConversation(orgId);
 
-				await conversation.create('TTS Actor Analysis', null, null, false);
+				await conversation.create('TTS Actor Analysis', FAST_MODEL, null, false);
 
 				const response = await conversation.sendMessageAndWaitForResponse(prompt);
 

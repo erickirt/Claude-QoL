@@ -16,7 +16,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 	const LAST_CHUNK_SIZE = 15000;     // Reserved for end (guaranteed recency bias)
 	const MAIN_TARGET_CHUNK = 30000;   // Target for front chunks
 	// Implicit MAX = 1.5x MAIN_TARGET due to rounding in chunking
-	const SUMMARY_MODEL = 'claude-haiku-4-5-20251001';
+	
 
 	//#region UI elements creation
 	function createBranchButton() {
@@ -627,7 +627,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 		// Create temp conversation
 		const summaryConvoName = `Temp_Summary_${Date.now()}`;
 		const tempConversation = new ClaudeConversation(orgId);
-		await tempConversation.create(summaryConvoName, SUMMARY_MODEL, null);
+		await tempConversation.create(summaryConvoName, FAST_MODEL, null);
 
 		try {
 			// ===== PHASE 1: Calculate chunk boundaries (work backwards) =====
