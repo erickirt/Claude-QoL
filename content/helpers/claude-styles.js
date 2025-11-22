@@ -754,6 +754,7 @@ function createClaudeTooltip(element, tooltipText, deleteOnClick) {
 	const tooltipContent = document.createElement('div');
 	tooltipContent.id = tooltipId;
 	tooltipContent.className = CLAUDE_CLASSES.TOOLTIP_CONTENT + ' tooltip-content';
+	tooltipContent.style.backgroundColor = 'rgba(0, 0, 0, 0.8)';
 	tooltipContent.setAttribute('data-side', 'bottom');
 	tooltipContent.setAttribute('data-align', 'center');
 	tooltipContent.setAttribute('data-state', 'delayed-open');
