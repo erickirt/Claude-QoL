@@ -830,7 +830,12 @@ function tryAddTopRightButton(buttonClass, createButtonFn, tooltipText = '', for
 
 	let container;
 	if (isChatPage) container = document.querySelector("[data-testid=\"chat-actions\"]")
-	else container = document.querySelector(".absolute.right-3.z-header.draggable-none")
+	else {
+		const buttonWithGhost = document.querySelector('[class*="look-around"]');
+		if (buttonWithGhost) {
+			container = buttonWithGhost.closest('.z-header');
+		}
+	}
 
 	if (!container && isChatPage) container = document.querySelector("[data-testid=\"wiggle-controls-actions\"]")
 
