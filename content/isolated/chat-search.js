@@ -471,7 +471,7 @@
 
 				messageElement.scrollIntoView({
 					behavior: 'smooth',
-					block: 'center'
+					block: 'start'
 				});
 
 				messageElement.style.transition = 'background-color 0.3s';
