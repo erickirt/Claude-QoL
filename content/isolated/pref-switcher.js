@@ -204,13 +204,14 @@
 		}
 
 		const containerWrapper = sidebarNav.querySelector('.flex.flex-grow.flex-col.overflow-y-auto');
-		const mainContainer = containerWrapper?.querySelector('.transition-all.duration-200');
+		const containers = containerWrapper?.querySelectorAll('.transition-all.duration-200');
+		const mainContainer = containers[containers.length - 1].querySelector('.px-2.mt-4');
 		if (!mainContainer) {
 			return null;
 		}
 
 		// Look for the Starred section
-		const starredSection = mainContainer.querySelector('div.flex.flex-col.mb-6');
+		const starredSection = mainContainer.querySelector('div.flex.flex-col.mb-4');
 		// Check if the Recents section exists as the next sibling
 		let recentsSection = null;
 		if (starredSection) {
@@ -234,18 +235,10 @@
 		const section = document.createElement('div');
 		section.className = 'flex flex-col mb-6 preset-switcher-section';
 
-		// Header
-		const header = document.createElement('div');
-		header.className = 'sticky bg-gradient-to-b from-bg-200 from-50% to-bg-200/40 px-1.5';
-		header.style.paddingBottom = '0.5rem';
-		header.style.zIndex = '9999';
-
 		const title = document.createElement('h3');
 		title.textContent = 'Preferences Switcher';
-		title.className = 'text-text-300 flex items-center gap-1.5 text-xs select-none z-10';
+		title.className = 'text-text-500 pb-2 mt-1 text-xs select-none pl-2 pr-2';
 		createClaudeTooltip(title, 'Changing preferences will reset the caching status of the conversation');
-
-		header.appendChild(title);
 
 		// Content
 		const content = document.createElement('div');
@@ -256,7 +249,7 @@
 		dropdown.classList.add('preset-switcher-dropdown');
 		content.appendChild(dropdown);
 
-		section.appendChild(header);
+		section.appendChild(title);
 		section.appendChild(content);
 
 		return section;
