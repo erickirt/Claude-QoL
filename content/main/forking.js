@@ -215,6 +215,8 @@ If this is a writing or creative discussion, include sections for characters, pl
 			const chatName = conversationData.name;
 			const projectUuid = conversationData.project?.uuid || null;
 
+			let forkAttachments = [];
+
 			// Apply summary if needed
 			if (pendingFork.rawTextPercentage < 100) {
 				loadingModal.setContent(createLoadingContent('Generating conversation summary...'));
@@ -235,14 +237,42 @@ If this is a writing or creative discussion, include sections for characters, pl
 
 				if (toSummarize.length > 0) {
 					const summaryMsgs = await chunkAndSummarize(orgId, toSummarize);
+
+					// Extract summary texts from user messages (every other, starting at 0)
+					const summaryTexts = summaryMsgs
+						.filter((_, i) => i % 2 === 0)
+						.map(m => m.content[0].text);
+
+					forkAttachments = summaryTexts.map((text, i) => ({
+						extracted_content: text,
+						file_name: `summary_chunk_${i + 1}.txt`,
+						file_size: text.length,
+						file_type: "text/plain"
+					}));
+
 					if (toKeep.length > 0) {
-						toKeep[0] = {
-							...toKeep[0],
-							parent_message_uuid: summaryMsgs.at(-1).uuid
-						};
+						toKeep[0] = { ...toKeep[0], parent_message_uuid: summaryMsgs.at(-1).uuid };
+
+						const chatlogText = toKeep.map(msg => formatMessageContent(msg)).join('\n\n');
+						forkAttachments.push({
+							extracted_content: chatlogText,
+							file_name: "chatlog.txt",
+							file_size: chatlogText.length,
+							file_type: "text/plain"
+						});
 					}
+
 					messages = [...summaryMsgs, ...toKeep];
 				}
+			} else {
+				// No summarization - full chatlog
+				const chatlogText = messages.map(msg => formatMessageContent(msg)).join('\n\n');
+				forkAttachments = [{
+					extracted_content: chatlogText,
+					file_name: "chatlog.txt",
+					file_size: chatlogText.length,
+					file_type: "text/plain"
+				}];
 			}
 
 			loadingModal.setContent(createLoadingContent('Creating forked conversation...'));
@@ -270,7 +300,8 @@ If this is a writing or creative discussion, include sections for characters, pl
 				orgId,
 				messages,
 				chatName,
-				projectUuid
+				projectUuid,
+				forkAttachments
 			);
 
 			loadingModal.setContent(createLoadingContent('Fork complete! Redirecting...'));
@@ -377,7 +408,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 		});
 	}
 
-	async function createFork(orgId, messages, chatName, projectUuid) {
+	async function createFork(orgId, messages, chatName, projectUuid, forkAttachments) {
 		if (!chatName || chatName.trim() === '') chatName = "Untitled";
 		const newName = `Fork of ${chatName}`;
 		const model = pendingFork.model;
@@ -385,8 +416,6 @@ If this is a writing or creative discussion, include sections for characters, pl
 		const conversation = new ClaudeConversation(orgId);
 		const newUuid = await conversation.create(newName, model, projectUuid);
 		await storePhantomMessagesAndWait(newUuid, messages);
-
-		const chatlogText = messages.map(msg => formatMessageContent(msg)).join('\n\n');
 
 		// Just collect what's in the messages (already filtered)
 		const allFiles = messages.flatMap(m => m.files_v2 || []);
@@ -409,12 +438,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 
 		const finalAttachments = [
 			...dedupedAttachments,
-			{
-				extracted_content: chatlogText,
-				file_name: "chatlog.txt",
-				file_size: chatlogText.length,
-				file_type: "text/plain"
-			}
+			...forkAttachments
 		];
 
 		/*const processedSyncSources = await Promise.all(
