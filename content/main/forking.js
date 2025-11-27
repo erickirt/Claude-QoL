@@ -742,13 +742,16 @@ If this is a writing or creative discussion, include sections for characters, pl
 				summaryTexts.push(summaryText);
 			}
 
+			// ===== PHASE 2.5: User review/edit summaries =====
+			const editedSummaryTexts = await showSummaryEditModal(summaryTexts, chunks, tempConversation);
+
 			// ===== PHASE 3: Create synthetic message pairs =====
 			const syntheticMessages = [];
 
-			for (let i = 0; i < summaryTexts.length; i++) {
-				const summaryText = summaryTexts[i];
+			for (let i = 0; i < editedSummaryTexts.length; i++) {
+				const summaryText = editedSummaryTexts[i];
 				const isFirstPair = i === 0;
-				const isLastPair = i === summaryTexts.length - 1;
+				const isLastPair = i === editedSummaryTexts.length - 1;
 
 				const userUuid = crypto.randomUUID();
 				const assistantUuid = crypto.randomUUID();
@@ -790,7 +793,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 			console.log('Generated synthetic summary messages:', JSON.stringify(syntheticMessages));
 			return syntheticMessages;
 		} finally {
-			await tempConversation.delete();
+			//await tempConversation.delete();
 		}
 	}
 
@@ -854,6 +857,205 @@ If this is a writing or creative discussion, include sections for characters, pl
 		//console.log(`Calculated ${frontChunks.length} front chunks and 1 last chunk for summarization.`);
 		//console.log("Chunks:", [...frontChunks, lastChunk]);
 		return [...frontChunks, lastChunk];
+	}
+
+	async function showSummaryEditModal(summaryTexts, chunks, tempConversation) {
+		return new Promise((resolve, reject) => {
+			const content = document.createElement('div');
+
+			// Indicator text - larger and more visible
+			const indicator = document.createElement('div');
+			indicator.className = 'mb-3 text-text-200 text-center text-lg font-semibold';
+			indicator.textContent = `Summary 1 of ${summaryTexts.length}`;
+			content.appendChild(indicator);
+
+			// Create all textareas (only first visible)
+			const textareas = summaryTexts.map((text, i) => {
+				const textarea = document.createElement('textarea');
+				textarea.className = CLAUDE_CLASSES.INPUT;
+				textarea.value = text;
+				textarea.rows = 18;
+				textarea.style.resize = 'vertical';
+				textarea.style.display = i === 0 ? 'block' : 'none';
+				content.appendChild(textarea);
+				return textarea;
+			});
+
+			let currentIndex = 0;
+
+			// Navigation container
+			const navContainer = document.createElement('div');
+			navContainer.className = 'flex items-center justify-between mt-3';
+
+			const leftBtn = createClaudeButton('← Previous', 'secondary');
+			leftBtn.disabled = true;
+			leftBtn.style.opacity = '0.5';
+			leftBtn.style.cursor = 'not-allowed';
+
+			const editWithClaudeBtn = createClaudeButton('Edit with Claude', 'secondary');
+
+			// Style it orange
+			editWithClaudeBtn.style.backgroundColor = 'hsl(var(--accent-main-100))';
+			editWithClaudeBtn.style.color = 'hsl(var(--oncolor-100))';
+			editWithClaudeBtn.style.borderColor = 'hsl(var(--accent-main-100))';
+
+			editWithClaudeBtn.addEventListener('pointerenter', () => {
+				editWithClaudeBtn.style.backgroundColor = 'hsl(var(--accent-main-200))';
+			});
+			editWithClaudeBtn.addEventListener('pointerleave', () => {
+				editWithClaudeBtn.style.backgroundColor = 'hsl(var(--accent-main-100))';
+			});
+
+			const rightBtn = createClaudeButton('Next →', 'secondary');
+			if (summaryTexts.length <= 1) {
+				rightBtn.disabled = true;
+				rightBtn.style.opacity = '0.5';
+				rightBtn.style.cursor = 'not-allowed';
+			}
+
+			function updateNavigation() {
+				indicator.textContent = `Summary ${currentIndex + 1} of ${summaryTexts.length}`;
+
+				leftBtn.disabled = currentIndex === 0;
+				leftBtn.style.opacity = leftBtn.disabled ? '0.5' : '1';
+				leftBtn.style.cursor = leftBtn.disabled ? 'not-allowed' : 'pointer';
+
+				rightBtn.disabled = currentIndex === summaryTexts.length - 1;
+				rightBtn.style.opacity = rightBtn.disabled ? '0.5' : '1';
+				rightBtn.style.cursor = rightBtn.disabled ? 'not-allowed' : 'pointer';
+			}
+
+			function showTextarea(index) {
+				textareas[currentIndex].style.display = 'none';
+				currentIndex = index;
+				textareas[currentIndex].style.display = 'block';
+				updateNavigation();
+			}
+
+			leftBtn.onclick = () => {
+				if (currentIndex > 0) showTextarea(currentIndex - 1);
+			};
+
+			rightBtn.onclick = () => {
+				if (currentIndex < summaryTexts.length - 1) showTextarea(currentIndex + 1);
+			};
+
+			editWithClaudeBtn.onclick = async () => {
+				let editPrompt;
+				try {
+					editPrompt = await showClaudePrompt('How should Claude edit this summary?', '');
+				} catch (e) {
+					return; // User cancelled
+				}
+				if (!editPrompt) return;
+
+				const loadingModal = createLoadingModal('Rewriting summary with Claude...');
+				loadingModal.show();
+
+				try {
+					const currentSummary = textareas[currentIndex].value;
+
+					// Previous summaries from textareas (includes user edits)
+					const previousSummaryAttachments = [];
+					for (let i = 0; i < currentIndex; i++) {
+						previousSummaryAttachments.push({
+							extracted_content: textareas[i].value,
+							file_name: `summary_chunk_${i + 1}.txt`,
+							file_size: textareas[i].value.length,
+							file_type: "text/plain"
+						});
+					}
+
+					// Get chunk for current summary
+					const chunk = chunks[currentIndex];
+
+					// Format chatlog
+					const chatlogText = chunk.map(msg => {
+						const role = msg.sender === 'human' ? '[User]' : '[Assistant]';
+						const text = formatMessageContent(msg);
+						return `${role}\n${text}`;
+					}).join('\n\n');
+
+					// Collect files from chunk
+					const files = chunk.flatMap(m => m.files_v2 || []);
+					const attachments = chunk.flatMap(m => m.attachments || []);
+
+					// Download and upload files
+					const downloadedFiles = await downloadFiles(files.map(f => ({
+						uuid: f.file_uuid,
+						url: f.file_kind === "image" ? f.preview_asset.url : f.document_asset.url,
+						kind: f.file_kind,
+						name: f.file_name
+					})));
+
+					const uploadedFileUuids = await Promise.all(
+						downloadedFiles.map(file =>
+							uploadFile(tempConversation.orgId, file).then(meta => meta.file_uuid)
+						)
+					);
+
+					// Build prompt
+					const prompt = `\`\`\`
+${currentSummary}
+\`\`\`
+
+The above is the summary to rewrite. Please make the following changes:
+
+\`\`\`
+${editPrompt}
+\`\`\`
+
+Provide the complete rewritten summary.`;
+
+					// All attachments
+					const allAttachments = [
+						...previousSummaryAttachments,
+						...attachments,
+						{
+							extracted_content: chatlogText,
+							file_name: "chatlog.txt",
+							file_size: chatlogText.length,
+							file_type: "text/plain"
+						}
+					];
+
+					const assistantMessage = await tempConversation.sendMessageAndWaitForResponse(prompt, {
+						attachments: allAttachments,
+						files: uploadedFileUuids,
+					});
+
+					const newSummary = ClaudeConversation.extractMessageText(assistantMessage);
+					textareas[currentIndex].value = newSummary;
+
+					loadingModal.destroy();
+				} catch (error) {
+					loadingModal.destroy();
+					showClaudeAlert('Error', `Failed to rewrite summary: ${error.message}`);
+				}
+			};
+
+			navContainer.appendChild(leftBtn);
+			navContainer.appendChild(editWithClaudeBtn);
+			navContainer.appendChild(rightBtn);
+			content.appendChild(navContainer);
+
+			// Create modal
+			const modal = new ClaudeModal('Review Summaries', content);
+			modal.modal.classList.remove('max-w-md');
+			modal.modal.classList.add('max-w-2xl');
+
+			modal.addCancel('Cancel', () => {
+				reject(new Error('User cancelled summary review'));
+			});
+
+			modal.addConfirm('Submit', () => {
+				const editedTexts = textareas.map(ta => ta.value);
+				resolve(editedTexts);
+				return true;
+			});
+
+			modal.show();
+		});
 	}
 
 	//#endregion
