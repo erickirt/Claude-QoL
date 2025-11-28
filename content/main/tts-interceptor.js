@@ -2,8 +2,6 @@
 (function () {
 	'use strict';
 
-	const pendingRequests = new Map(); // conversationId -> timestamp
-
 	// Override clipboard API
 	const originalWrite = navigator.clipboard.write;
 	navigator.clipboard.write = async (data) => {
@@ -14,6 +12,11 @@
 			if (item && item.types.includes('text/plain')) {
 				const blob = await item.getType('text/plain');
 				capturedText = await blob.text();
+
+				// Strip phantom/UUID markers
+				capturedText = capturedText.replace(/====PHANTOM_MESSAGE====/g, '');
+				capturedText = capturedText.replace(/====UUID:[a-f0-9-]+====/gi, '');
+				capturedText = capturedText.replace(/\n{3,}/g, '\n\n').trim();
 			}
 		} catch (error) {
 			console.error('Error extracting clipboard text:', error);
@@ -57,6 +60,43 @@
 		return originalWrite.call(navigator.clipboard, data);
 	};
 
+	// Helper to fetch conversation and find new assistant message
+	async function findNewAssistantMessage(orgId, conversationId, requestSentTime, maxRetries = 2) {
+		for (let attempt = 0; attempt <= maxRetries; attempt++) {
+			if (attempt > 0) {
+				console.log(`Assistant message not found, retrying (${attempt}/${maxRetries})...`);
+				await new Promise(r => setTimeout(r, 1000));
+			}
+
+			try {
+				const response = await fetch(
+					`/api/organizations/${orgId}/chat_conversations/${conversationId}?tree=True&rendering_mode=messages&render_all_tools=true`
+				);
+
+				if (!response.ok) {
+					console.error('Failed to fetch conversation:', response.status);
+					continue;
+				}
+
+				const data = await response.json();
+				const messages = data.chat_messages || [];
+
+				const assistantMessage = messages.find(msg =>
+					msg.sender === 'assistant' &&
+					msg.created_at > requestSentTime
+				);
+
+				if (assistantMessage) {
+					return assistantMessage;
+				}
+			} catch (error) {
+				console.error('Error fetching conversation:', error);
+			}
+		}
+
+		return null;
+	}
+
 	const originalFetch = window.fetch;
 	window.fetch = async (...args) => {
 		const [input, config] = args;
@@ -70,58 +110,75 @@
 			url = input.url;
 		}
 
-		// Track completion requests
+		// Intercept completion requests
 		if (url && (url.includes('/completion') || url.includes('/retry_completion')) && config?.method === 'POST') {
+			console.log('Intercepted completion request for TTS handling:', url);
+			const requestSentTime = new Date().toISOString();
+
+			// Extract org ID and conversation ID from URL
 			const urlParts = url.split('/');
-			const conversationId = urlParts[urlParts.indexOf('chat_conversations') + 1];
-			pendingRequests.set(conversationId, Date.now());
-		}
+			const orgIndex = urlParts.indexOf('organizations');
+			const convIndex = urlParts.indexOf('chat_conversations');
 
-		const response = await originalFetch(...args);
+			const orgId = orgIndex !== -1 ? urlParts[orgIndex + 1] : null;
+			const conversationId = convIndex !== -1 ? urlParts[convIndex + 1] : null;
 
-		// Check for conversation updates
-		if (url && url.includes('/chat_conversations/') &&
-			url.includes('tree=True') &&
-			config?.method === 'GET') {
+			if (!orgId || !conversationId) {
+				return originalFetch(...args);
+			}
 
-			const urlParts = url.split('/');
-			const conversationId = urlParts[urlParts.indexOf('chat_conversations') + 1]?.split('?')[0];
+			// Make the original request
+			const response = await originalFetch(...args);
 
-			const requestTime = pendingRequests.get(conversationId);
-			if (requestTime) {
-				// Wait for response to complete
-				response.clone().json().then(async (data) => {
-					// Check if we have a new message
-					const lastMessage = data.chat_messages?.[data.chat_messages.length - 1];
-					if (lastMessage && lastMessage.sender === 'assistant') {
-						const messageTime = new Date(lastMessage.created_at).getTime();
+			// Clone the response so we can consume the stream without affecting Claude's UI
+			const clonedResponse = response.clone();
 
-						// If message is newer than our request, notify for auto-speak
-						if (messageTime > requestTime) {
-							// Extract text from message content
-							let messageText = '';
-							for (const content of lastMessage.content) {
-								if (content.text) {
-									messageText += content.text + '\n';
-								}
-							}
+			// Consume the cloned stream in the background
+			(async () => {
+				try {
+					const reader = clonedResponse.body.getReader();
+					const decoder = new TextDecoder();
 
-							if (messageText) {
-								window.postMessage({
-									type: 'tts-new-message',
-									conversationId: conversationId,
-									text: messageText
-								}, '*');
-							}
+					// Consume until done
+					while (true) {
+						const { done, value } = await reader.read();
 
-							pendingRequests.delete(conversationId);
+						if (done) break;
+
+						// Decode and check for completion signal
+						const chunk = decoder.decode(value, { stream: true });
+						console.log('Received chunk from completion stream:', chunk);
+						console.log('Are we done?', done);
+						// Look for the message_stop event (or whatever Claude uses)
+						if (chunk.includes('event: message_stop') || chunk.includes('"type":"message_stop"')) {
+							console.log('Stream completion detected');
+							reader.releaseLock();
+							break;
 						}
 					}
-				});
-			}
+
+					reader.releaseLock();
+					console.log('Completed reading completion response stream for TTS handling');
+					// Now fetch the conversation to find the new message
+					const assistantMessage = await findNewAssistantMessage(orgId, conversationId, requestSentTime);
+					console.log('Found assistant message for TTS:', assistantMessage);
+					if (assistantMessage) {
+						window.postMessage({
+							type: 'tts-auto-speak',
+							messageUuid: assistantMessage.uuid
+						}, '*');
+					} else {
+						console.log('No new assistant message found after retries');
+					}
+				} catch (error) {
+					console.error('Error processing completion stream:', error);
+				}
+			})();
+
+			return response;
 		}
 
-		return response;
+		return originalFetch(...args);
 	};
 
 	// Handle dialogue analysis requests from ISOLATED world

@@ -197,23 +197,32 @@
 	let capturedText = null;
 
 	window.addEventListener('message', async (event) => {
-		if (event.data.type === 'tts-new-message') {
+		if (event.data.type === 'tts-auto-speak') {
 			const settings = await loadSettings();
-			if (settings.enabled && settings.autoSpeak) {
-				const { conversationId, text } = event.data;
+			if (!settings.enabled || !settings.autoSpeak) return;
 
-				// Get quotes-only setting for this chat
-				const result = await chrome.storage.local.get(`chatQuotesOnly_${conversationId}`);
-				const quotesOnly = result[`chatQuotesOnly_${conversationId}`] === true;
+			const { messageUuid } = event.data;
 
-				// Clean up the text
-				const messageText = cleanupText(text, quotesOnly);
+			// Retry logic to find the speak button (DOM might not be ready)
+			const maxRetries = 10;
+			const retryDelay = 300;
 
-				if (messageText) {
-					console.log("Autoplaying text:", messageText);
-					if (settings.apiKey) await playText(messageText, settings, conversationId);
+			for (let attempt = 0; attempt < maxRetries; attempt++) {
+				const messageElement = document.querySelector(`[data-message-uuid="${messageUuid}"]`);
+				if (messageElement) {
+					const speakButton = messageElement.querySelector('.tts-speak-button');
+					if (speakButton) {
+						console.log('Auto-speaking message:', messageUuid);
+						speakButton.click();
+						return;
+					}
+				}
+
+				if (attempt < maxRetries - 1) {
+					await new Promise(r => setTimeout(r, retryDelay));
 				}
 			}
+			console.log('Could not find speak button for message:', messageUuid);
 		} else if (event.data.type === 'tts-clipboard-request') {
 			const { text, requestId } = event.data;
 
