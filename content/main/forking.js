@@ -312,6 +312,10 @@ If this is a writing or creative discussion, include sections for characters, pl
 			}, 100);
 
 		} catch (error) {
+			if (error.message === 'USER_CANCELLED') {
+				loadingModal.destroy();
+				return;
+			}
 			console.error('Failed to fork conversation:', error);
 			loadingModal.setTitle('Error');
 			loadingModal.setContent(`Failed to fork conversation: ${error.message}`);
@@ -1045,7 +1049,7 @@ Provide the complete rewritten summary.`;
 			modal.modal.classList.add('max-w-2xl');
 
 			modal.addCancel('Cancel', () => {
-				reject(new Error('User cancelled summary review'));
+				reject(new Error('USER_CANCELLED'));
 			});
 
 			modal.addConfirm('Submit', () => {
