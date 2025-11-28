@@ -84,13 +84,15 @@ class ClaudeConversation {
 		try {
 			while (true) {
 				const { done, value } = await reader.read();
-				if (done) {
-					//console.log('Stream completed');
+
+				if (done) break;
+
+				// Decode and check for completion signal
+				const chunk = decoder.decode(value, { stream: true });
+
+				if (chunk.includes('event: message_stop')) {
 					break;
 				}
-				// Optional: log chunks if you want to see what's coming through
-				//const chunk = decoder.decode(value, { stream: true });
-				//console.log('Chunk:', chunk);
 			}
 		} finally {
 			reader.releaseLock();

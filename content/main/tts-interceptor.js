@@ -112,9 +112,6 @@
 
 		// Intercept completion requests
 		if (url && (url.includes('/completion') || url.includes('/retry_completion')) && config?.method === 'POST') {
-			console.log('Intercepted completion request for TTS handling:', url);
-			const requestSentTime = new Date().toISOString();
-
 			// Extract org ID and conversation ID from URL
 			const urlParts = url.split('/');
 			const orgIndex = urlParts.indexOf('organizations');
@@ -122,10 +119,15 @@
 
 			const orgId = orgIndex !== -1 ? urlParts[orgIndex + 1] : null;
 			const conversationId = convIndex !== -1 ? urlParts[convIndex + 1] : null;
+			const currentConversationId = window.location.pathname.match(/\/chat\/([^/?]+)/)?.[1];
 
-			if (!orgId || !conversationId) {
+			// Only handle if valid and matches current conversation
+			if (!orgId || !conversationId || conversationId !== currentConversationId) {
 				return originalFetch(...args);
 			}
+
+			console.log('Intercepted completion request for TTS handling:', url);
+			const requestSentTime = new Date().toISOString();
 
 			// Make the original request
 			const response = await originalFetch(...args);
@@ -147,8 +149,6 @@
 
 						// Decode and check for completion signal
 						const chunk = decoder.decode(value, { stream: true });
-						console.log('Received chunk from completion stream:', chunk);
-						console.log('Are we done?', done);
 						// Look for the message_stop event (or whatever Claude uses)
 						if (chunk.includes('event: message_stop') || chunk.includes('"type":"message_stop"')) {
 							console.log('Stream completion detected');
