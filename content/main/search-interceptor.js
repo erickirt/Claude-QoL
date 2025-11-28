@@ -41,7 +41,7 @@
 			lastSearchQuery = searchQuery; // Store the query
 
 			if (searchQuery) {
-				console.log('[Search Interceptor] Detected search query:', searchQuery);
+				//console.log('[Search Interceptor] Detected search query:', searchQuery);
 
 				// Ask ISOLATED if we should intercept
 				const messageId = messageIdCounter++;
@@ -69,7 +69,7 @@
 				const response = await responsePromise;
 
 				if (response.intercept) {
-					console.log('[Search Interceptor] Intercepting with custom results:', response.results.length);
+					//console.log('[Search Interceptor] Intercepting with custom results:', response.results.length);
 
 					// Return fake Response with our results
 					return new Response(JSON.stringify(response.results), {
@@ -80,7 +80,7 @@
 						}
 					});
 				} else {
-					console.log('[Search Interceptor] Passing through to original fetch');
+					//console.log('[Search Interceptor] Passing through to original fetch');
 				}
 			}
 		}
@@ -129,13 +129,13 @@
 				}
 
 				const conversationId = match[1];
-				console.log('[Search Interceptor] Storing query for conversation:', conversationId, lastSearchQuery);
+				//console.log('[Search Interceptor] Storing query for conversation:', conversationId, lastSearchQuery);
 
 				// Get existing queries object
 				const queries = JSON.parse(localStorage.getItem('global_search_queries') || '{}');
 				queries[conversationId] = lastSearchQuery;
 				localStorage.setItem('global_search_queries', JSON.stringify(queries));
-				console.log('[Search Interceptor] Stored queries:', queries);
+				//console.log('[Search Interceptor] Stored queries:', queries);
 			});
 		});
 	}

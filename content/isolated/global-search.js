@@ -356,12 +356,12 @@
 		if (event.data.type !== 'SEARCH_INTERCEPT') return;
 
 		const { messageId, query, url } = event.data;
-		console.log('[Search Handler] Received intercept request:', query);
+		//console.log('[Search Handler] Received intercept request:', query);
 
 		// If text search is not enabled, don't intercept
 
 		if (sessionStorage.getItem('text_search_enabled') != 'true') {
-			console.log('[Search Handler] Text search disabled, not intercepting');
+			//console.log('[Search Handler] Text search disabled, not intercepting');
 			window.postMessage({
 				type: 'SEARCH_RESPONSE',
 				messageId,
@@ -374,7 +374,7 @@
 			// Search all conversations
 			const results = await searchAllConversations(query);
 
-			console.log('[Search Handler] Found', results.length, 'matching conversations');
+			//console.log('[Search Handler] Found', results.length, 'matching conversations');
 
 			window.postMessage({
 				type: 'SEARCH_RESPONSE',
