@@ -424,6 +424,49 @@ function removeUUIDMarkerFromElement(element) {
 }
 
 
+// ==== CLIPBOARD CLEANUP - Strip markers before copying ====
+const originalClipboardWrite = navigator.clipboard.write;
+navigator.clipboard.write = async (data) => {
+	try {
+		const item = data[0];
+		if (!item) return originalClipboardWrite.call(navigator.clipboard, data);
+
+		const types = {};
+
+		for (const type of item.types) {
+			const blob = await item.getType(type);
+
+			if (type === 'text/plain' || type === 'text/html') {
+				let text = await blob.text();
+
+				// Strip phantom markers
+				text = text.replace(/====PHANTOM_MESSAGE====/g, '');
+
+				// Strip UUID markers
+				text = text.replace(/====UUID:[a-f0-9-]+====/gi, '');
+
+				// Clean up extra newlines/whitespace from removal
+				if (type === 'text/plain') {
+					text = text.replace(/\n{3,}/g, '\n\n').trim();
+				} else {
+					// For HTML, clean up empty paragraphs that might result
+					text = text.replace(/<p[^>]*>\s*<\/p>/gi, '');
+				}
+
+				types[type] = new Blob([text], { type });
+			} else {
+				// Preserve other types as-is
+				types[type] = blob;
+			}
+		}
+
+		return originalClipboardWrite.call(navigator.clipboard, [new ClipboardItem(types)]);
+	} catch (error) {
+		console.error('[Phantom Messages] Error cleaning clipboard text:', error);
+		return originalClipboardWrite.call(navigator.clipboard, data);
+	}
+};
+
 setInterval(() => {
 	stylePhantomMessages();
 	extractAndStoreUUIDs();
