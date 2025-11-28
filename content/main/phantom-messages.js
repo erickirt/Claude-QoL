@@ -181,20 +181,41 @@ window.fetch = async (...args) => {
 	return originalFetch(...args);
 };
 
+function reorderKeys(obj, referenceObj) {
+	const orderedObj = {};
+	// First, add keys in the order they appear in referenceObj
+	// If key is missing from obj, use the value from referenceObj
+	for (const key of Object.keys(referenceObj)) {
+		orderedObj[key] = key in obj ? obj[key] : referenceObj[key];
+	}
+	// Then add any remaining keys from obj that weren't in referenceObj
+	for (const key of Object.keys(obj)) {
+		if (!(key in orderedObj)) {
+			orderedObj[key] = obj[key];
+		}
+	}
+	return orderedObj;
+}
+
 function injectPhantomMessages(data, phantomMessages) {
 	const timestamp = new Date().toISOString();
-
+	const referenceMsg = data.chat_messages[0];
+	let index = 0;
 	phantomMessages = phantomMessages.map(msg => {
-		const completeMsg = {
+		let completeMsg = {
 			uuid: msg.uuid || crypto.randomUUID(),
+			text: msg.text || '',
 			parent_message_uuid: msg.parent_message_uuid || "00000000-0000-4000-8000-000000000000",
 			sender: msg.sender || 'human',
 			content: msg.content || [],
 			created_at: msg.created_at || timestamp,
+			updated_at: msg.updated_at || timestamp,
 			files_v2: msg.files_v2 || [],
 			files: msg.files || [],
+			index: 0,	// Will be set below
 			attachments: msg.attachments || [],
-			sync_sources: msg.sync_sources || []
+			sync_sources: msg.sync_sources || [],
+			truncated: msg.truncated || false	// Is this referring to the summarization feature? Needs more testing
 		};
 
 		completeMsg.content = completeMsg.content.map(item => ({
@@ -213,12 +234,46 @@ function injectPhantomMessages(data, phantomMessages) {
 			}
 		});
 
+		// Reorder keys to match the reference message
+		if (referenceMsg) {
+			completeMsg = reorderKeys(completeMsg, referenceMsg);
+		}
+
 		return completeMsg;
 	});
 
+
+	let lastPhantom = phantomMessages[phantomMessages.length - 1];
+	if (lastPhantom && lastPhantom.sender === 'human') {
+		const ackMessage = {
+			uuid: crypto.randomUUID(),
+			parent_message_uuid: lastPhantom.uuid,
+			sender: 'assistant',
+			content: [{
+				start_timestamp: timestamp,
+				stop_timestamp: timestamp,
+				type: "text",
+				text: "Acknowledged - end of previous conversation.\n\n" + PHANTOM_MARKER,
+				citations: []
+			}],
+			created_at: timestamp,
+			files_v2: [],
+			files: [],
+			attachments: [],
+			sync_sources: []
+		};
+
+		// Reorder keys to match reference if available
+		if (referenceMsg) {
+			phantomMessages.push(reorderKeys(ackMessage, referenceMsg));
+		} else {
+			phantomMessages.push(ackMessage);
+		}
+		lastPhantom = ackMessage;
+	}
+
 	console.log(`Injecting ${phantomMessages.length} phantom messages into conversation`);
 
-	const lastPhantom = phantomMessages[phantomMessages.length - 1];
 	const rootMessages = data.chat_messages.filter(
 		msg => msg.parent_message_uuid === "00000000-0000-4000-8000-000000000000"
 	);
@@ -230,6 +285,13 @@ function injectPhantomMessages(data, phantomMessages) {
 	}
 
 	data.chat_messages = [...phantomMessages, ...data.chat_messages];
+	// Set correct index values
+	data.chat_messages.forEach((msg, idx) => {
+		msg.index = idx;
+	});
+
+
+	console.log('Updated chat messages with phantom messages:', data.chat_messages);
 }
 
 function injectUUIDMarkers(data) {

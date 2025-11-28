@@ -333,7 +333,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 	}
 
 	//#region Convo extraction & Other API
-	async function getConversationMessages(orgId, conversationId, targetParentUuid) {
+	async function getConversationMessages(orgId, conversationId, targetUUID) {
 		const conversation = new ClaudeConversation(orgId, conversationId);
 		const conversationData = await conversation.getData(false);
 
@@ -342,7 +342,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 		for (const message of conversationData.chat_messages) {
 			messages.push(message); // Keep full message object with all properties
 
-			if (message.parent_message_uuid === targetParentUuid) {
+			if (message.uuid === targetUUID) {
 				break;
 			}
 		}
