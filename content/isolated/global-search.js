@@ -462,6 +462,11 @@
 			return;
 		}
 
+		// Check if toggle already exists anywhere on page
+		if (document.querySelector('.global-search-toggle')) {
+			return;
+		}
+
 		// Find the container with "X chats with Claude"
 		const containers = document.querySelectorAll('.flex.items-center.z-header.h-12');
 		let targetContainer = null;
@@ -475,19 +480,9 @@
 
 		if (!targetContainer) return;
 
-		// Check if toggle already exists
-		if (targetContainer.querySelector('.global-search-toggle')) {
-			return;
-		}
-
-		// Add justify-between if not present
-		if (!targetContainer.classList.contains('justify-between')) {
-			targetContainer.classList.add('justify-between');
-		}
-
-		// Create toggle container
+		// Create toggle container - use ml-auto to push to right without affecting other elements
 		const toggleContainer = document.createElement('div');
-		toggleContainer.className = 'flex items-center gap-2 global-search-toggle';
+		toggleContainer.className = 'flex items-center gap-2 global-search-toggle ml-auto shrink-0';
 
 		// Labels
 		const titleLabel = document.createElement('span');
@@ -524,7 +519,7 @@
 		toggleContainer.appendChild(toggle.container);
 		toggleContainer.appendChild(textLabel);
 
-		// Add to page
+		// Add to page - DON'T modify parent's classes
 		targetContainer.appendChild(toggleContainer);
 	}
 
