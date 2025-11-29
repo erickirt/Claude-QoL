@@ -532,12 +532,161 @@
 		});
 	}
 
+	//#region LibreChat JSON import
+	function parseLibrechatJson(jsonText) {
+		const data = JSON.parse(jsonText);
+		const warnings = [];
+
+		if (!data.messages || !Array.isArray(data.messages) || data.messages.length === 0) {
+			throw new Error('Invalid LibreChat format: missing or empty messages array');
+		}
+
+		// Warn about branches upfront
+		if (data.branches) {
+			warnings.push('Multiple branches detected. Importing rightmost branch.');
+		}
+
+		let messages;
+
+		if (data.recursive) {
+			// Recursive format - nested children
+			messages = flattenRecursiveTree(data.messages);
+		} else {
+			// Sequential format - flat with parentMessageId
+			messages = extractLinearBranch(data.messages);
+		}
+
+		if (messages.length === 0) {
+			throw new Error('No messages found in file');
+		}
+
+		// Convert to internal format
+		const chat_messages = messages.map(msg => {
+			// Convert files to attachments (text-based files only)
+			const attachments = [];
+			if (msg.files && Array.isArray(msg.files)) {
+				for (const file of msg.files) {
+					if (file.text) {
+						attachments.push({
+							extracted_content: file.text,
+							file_name: file.filename || 'unknown',
+							file_size: file.bytes || file.text.length,
+							file_type: file.type || 'text/plain'
+						});
+					}
+				}
+			}
+
+			return {
+				sender: msg.isCreatedByUser ? ROLES.USER.apiName : ROLES.ASSISTANT.apiName,
+				content: extractLibrechatContent(msg),
+				created_at: msg.createdAt,
+				files_v2: [],
+				files: [],
+				attachments: attachments,
+				sync_sources: []
+			};
+		});
+
+		// Ensure conversation starts with user message
+		if (chat_messages.length > 0 && chat_messages[0].sender !== ROLES.USER.apiName) {
+			warnings.push('Conversation did not start with a user message. A placeholder was added.');
+			chat_messages.unshift({
+				sender: ROLES.USER.apiName,
+				content: [{ type: 'text', text: '[Conversation imported from LibreChat]' }],
+				created_at: chat_messages[0].created_at,
+				files_v2: [],
+				files: [],
+				attachments: [],
+				sync_sources: []
+			});
+		}
+
+		return {
+			name: data.title || 'Imported Conversation',
+			chat_messages,
+			warnings
+		};
+	}
+
+	function extractLibrechatContent(msg) {
+		// If content array exists and has items, use it
+		if (msg.content && Array.isArray(msg.content) && msg.content.length > 0) {
+			return msg.content.map(block => {
+				if (block.type === 'think') {
+					// LibreChat "think" -> Claude "thinking"
+					return {
+						type: 'thinking',
+						thinking: block.think || ''
+					};
+				} else if (block.type === 'text') {
+					return {
+						type: 'text',
+						text: block.text || ''
+					};
+				} else {
+					// Pass through unknown types as-is
+					return block;
+				}
+			});
+		}
+
+		// Fall back to text field
+		return [{
+			type: 'text',
+			text: msg.text || ''
+		}];
+	}
+
+	function extractLinearBranch(messages) {
+		const messageMap = new Map();
+		for (const msg of messages) {
+			messageMap.set(msg.messageId, msg);
+		}
+
+		// Last message in array → walk backward to root
+		const lastMessage = messages[messages.length - 1];
+		const branch = [];
+		let current = lastMessage;
+
+		while (current) {
+			branch.unshift(current);
+
+			const parentId = current.parentMessageId;
+			if (!parentId || parentId === '00000000-0000-0000-0000-000000000000') {
+				break;
+			}
+
+			current = messageMap.get(parentId);
+		}
+
+		return branch;
+	}
+
+	function flattenRecursiveTree(messages) {
+		// Start from last root, follow last child at each level
+		const branch = [];
+		let current = messages[messages.length - 1];
+
+		while (current) {
+			branch.push(current);
+
+			if (current.children && current.children.length > 0) {
+				current = current.children[current.children.length - 1];
+			} else {
+				current = null;
+			}
+		}
+
+		return branch;
+	}
+	//#endregion
 
 	async function handleImport(model, includeFiles, includeToolCalls) {
 		// Trigger file picker
 		const fileInput = document.createElement('input');
 		fileInput.type = 'file';
-		fileInput.accept = '.txt';
+		fileInput.accept = '.txt,.json';
 
 		const file = await new Promise(resolve => {
 			fileInput.onchange = e => resolve(e.target.files[0]);
@@ -555,7 +704,11 @@
 		loadingModal.show();
 
 		try {
-			parsedData = parseAndValidateText(fileContent);
+			if (file.name.endsWith('.json')) {
+				parsedData = parseLibrechatJson(fileContent);
+			} else {
+				parsedData = parseAndValidateText(fileContent);
+			}
 		} catch (error) {
 			// Show error
 			showClaudeAlert('Import Error', error.message);
@@ -611,7 +764,7 @@
 		// Trigger file picker
 		const fileInput = document.createElement('input');
 		fileInput.type = 'file';
-		fileInput.accept = '.txt';
+		fileInput.accept = '.txt,.json';
 
 		const file = await new Promise(resolve => {
 			fileInput.onchange = e => resolve(e.target.files[0]);
@@ -629,7 +782,11 @@
 		loadingModal.show();
 
 		try {
-			parsedData = parseAndValidateText(fileContent);
+			if (file.name.endsWith('.json')) {
+				parsedData = parseLibrechatJson(fileContent);
+			} else {
+				parsedData = parseAndValidateText(fileContent);
+			}
 			parsedData.chat_messages = await downloadAndReuploadFiles(parsedData.chat_messages, loadingModal);
 		} catch (error) {
 			showClaudeAlert('Replace Error', error.message || 'Invalid format');
@@ -662,9 +819,7 @@
 
 	async function showExportImportModal() {
 		const conversationId = getConversationId();
-		if (!conversationId) {
-			throw new Error('Not in a conversation');
-		}
+		const isInConversation = Boolean(conversationId);
 
 		// Get last used format from localStorage
 		const lastFormat = localStorage.getItem('lastExportFormat') || 'txt_txt';
@@ -672,57 +827,103 @@
 		// Build the modal content
 		const content = document.createElement('div');
 
-		// Format label (no "Export" header)
-		const formatLabel = document.createElement('label');
-		formatLabel.className = CLAUDE_CLASSES.LABEL;
-		formatLabel.textContent = 'Export Format';
-		content.appendChild(formatLabel);
+		// Variables to hold references (may not be created)
+		let formatSelect, toggleInput;
 
-		const exportContainer = document.createElement('div');
-		exportContainer.className = 'mb-4 flex gap-2';
+		//#region Export section (only if in conversation)
+		if (isInConversation) {
+			// Format label
+			const formatLabel = document.createElement('label');
+			formatLabel.className = CLAUDE_CLASSES.LABEL;
+			formatLabel.textContent = 'Export Format';
+			content.appendChild(formatLabel);
 
-		// Format select
-		const formatSelect = createClaudeSelect([
-			{ value: 'txt_txt', label: 'Text (.txt)' },
-			{ value: 'jsonl_jsonl', label: 'JSONL (.jsonl)' },
-			{ value: 'librechat_json', label: 'Librechat (.json)' },
-			{ value: 'raw_json', label: 'Raw JSON (.json)' }
-		], lastFormat);
-		formatSelect.style.flex = '1';
-		exportContainer.appendChild(formatSelect);
+			const exportContainer = document.createElement('div');
+			exportContainer.className = 'mb-4 flex gap-2';
 
-		// Export button
-		const exportButton = createClaudeButton('Export', 'primary');
-		exportButton.style.minWidth = '80px';
-		exportContainer.appendChild(exportButton);
+			// Format select
+			formatSelect = createClaudeSelect([
+				{ value: 'txt_txt', label: 'Text (.txt)' },
+				{ value: 'jsonl_jsonl', label: 'JSONL (.jsonl)' },
+				{ value: 'librechat_json', label: 'Librechat (.json)' },
+				{ value: 'raw_json', label: 'Raw JSON (.json)' }
+			], lastFormat);
+			formatSelect.style.flex = '1';
+			exportContainer.appendChild(formatSelect);
 
-		content.appendChild(exportContainer);
+			// Export button
+			const exportButton = createClaudeButton('Export', 'primary');
+			exportButton.style.minWidth = '80px';
+			exportContainer.appendChild(exportButton);
 
-		// Tree option container
-		const treeOption = document.createElement('div');
-		treeOption.id = 'treeOption';
-		treeOption.className = 'mb-4 hidden';
+			content.appendChild(exportContainer);
 
-		const { container: toggleContainer, input: toggleInput } = createClaudeToggle('Export entire tree', false);
-		treeOption.appendChild(toggleContainer);
-		content.appendChild(treeOption);
+			// Tree option container
+			const treeOption = document.createElement('div');
+			treeOption.id = 'treeOption';
+			treeOption.className = 'mb-4 hidden';
 
-		// Show/hide tree option based on initial value
-		const initialFormat = lastFormat.split('_')[0];
-		treeOption.classList.toggle('hidden', !['librechat', 'raw'].includes(initialFormat));
+			const { container: toggleContainer, input: treeToggleInput } = createClaudeToggle('Export entire tree', false);
+			toggleInput = treeToggleInput;
+			treeOption.appendChild(toggleContainer);
+			content.appendChild(treeOption);
 
-		// Update tree option visibility on select change
-		formatSelect.onchange = () => {
-			const format = formatSelect.value.split('_')[0];
-			treeOption.classList.toggle('hidden', !['librechat', 'raw'].includes(format));
-		};
+			// Show/hide tree option based on initial value
+			const initialFormat = lastFormat.split('_')[0];
+			treeOption.classList.toggle('hidden', !['librechat', 'raw'].includes(initialFormat));
 
-		// Divider
-		const divider = document.createElement('hr');
-		divider.className = 'my-4 border-border-300';
-		content.appendChild(divider);
+			// Update tree option visibility on select change
+			formatSelect.onchange = () => {
+				const format = formatSelect.value.split('_')[0];
+				treeOption.classList.toggle('hidden', !['librechat', 'raw'].includes(format));
+			};
 
-		// Model label (no "Import" header)
+			// Export button handler
+			exportButton.onclick = async () => {
+				const loadingModal = createLoadingModal('Exporting...');
+				loadingModal.show();
+
+				try {
+					localStorage.setItem('lastExportFormat', formatSelect.value);
+
+					const parts = formatSelect.value.split("_");
+					const format = parts[0];
+					const extension = parts[1];
+					const exportTree = toggleInput.checked;
+
+					const orgId = getOrgId();
+					const conversation = new ClaudeConversation(orgId, conversationId);
+					const conversationData = await conversation.getData(exportTree);
+
+					const filename = `Claude_export_${conversationData.name}_${conversationId}.${extension}`;
+					const exportContent = await formatExport(conversationData, format, conversationId);
+
+					const blob = new Blob([exportContent], { type: 'text/plain' });
+					const url = URL.createObjectURL(blob);
+					const link = document.createElement('a');
+					link.href = url;
+					link.download = filename;
+					link.click();
+					URL.revokeObjectURL(url);
+
+					loadingModal.destroy();
+					modal.hide();
+				} catch (error) {
+					console.error('Export failed:', error);
+					loadingModal.destroy();
+					showClaudeAlert('Export Error', error.message || 'Failed to export conversation');
+				}
+			};
+
+			// Divider
+			const divider = document.createElement('hr');
+			divider.className = 'my-4 border-border-300';
+			content.appendChild(divider);
+		}
+		//#endregion
+
+		//#region Import section (always shown)
+		// Model label
 		const modelLabel = document.createElement('label');
 		modelLabel.className = CLAUDE_CLASSES.LABEL;
 		modelLabel.textContent = 'Imported Conversation Model';
@@ -745,100 +946,68 @@
 		content.appendChild(importContainer);
 
 		// Add toggles
-		const importFilesToggle = createClaudeToggle('Import files/attachments', true);
+		const importFilesToggle = createClaudeToggle('Import files/attachments (txt only)', true);
 		importFilesToggle.container.classList.add('mb-2', 'mt-2');
 		content.appendChild(importFilesToggle.container);
 
-		const importToolCallsToggle = createClaudeToggle('Import tool calls', false);
+		const importToolCallsToggle = createClaudeToggle('Import tool calls (txt only)', false);
 		importToolCallsToggle.container.classList.add('mb-4');
 		content.appendChild(importToolCallsToggle.container);
 
 		// Import note
 		const note = document.createElement('p');
 		note.className = CLAUDE_CLASSES.TEXT_SM + ' text-text-400';
-		note.textContent = 'Imports txt format only.';
+		note.textContent = 'Imports txt (from this modal) and LibreChat JSON formats.';
 		content.appendChild(note);
 
-		// Another divider
-		const divider2 = document.createElement('hr');
-		divider2.className = 'my-4 border-border-300';
-		content.appendChild(divider2);
-
-		// Replace phantom messages section
-		const replaceLabel = document.createElement('label');
-		replaceLabel.className = CLAUDE_CLASSES.LABEL;
-		replaceLabel.textContent = 'Replace Phantom Messages';
-		content.appendChild(replaceLabel);
-
-		const replaceNote = document.createElement('p');
-		replaceNote.className = CLAUDE_CLASSES.TEXT_SM + ' text-text-400';
-		replaceNote.textContent = `Replaces the "fake" message history for this conversation.`;
-		content.appendChild(replaceNote);
-
-		const replaceButton = createClaudeButton('Replace from File', 'secondary');
-		replaceButton.className += ' mb-2';
-		content.appendChild(replaceButton);
-		replaceButton.onclick = () => handleReplacePhantom(replaceButton);
-
-		// Warning note
-		const warningNote = document.createElement('p');
-		warningNote.className = CLAUDE_CLASSES.TEXT_SM;
-		warningNote.style.color = '#de2929';
-		warningNote.innerHTML = '⚠️ <strong>Visual change only:</strong> This replaces what you see in the chat history. The AI\'s context (what it can actually read) remains unchanged.';
-		warningNote.className += ' mb-3';
-		content.appendChild(warningNote);
-
-		// Create modal
-		const modal = new ClaudeModal('Export & Import', content);
-
-		// Override max width
-		modal.modal.style.maxWidth = '28rem';
-
-		// Add event listeners
-		exportButton.onclick = async () => {
-			// Show loading modal
-			const loadingModal = createLoadingModal('Exporting...');
-			loadingModal.show();
-
-			try {
-				// Save the selected format
-				localStorage.setItem('lastExportFormat', formatSelect.value);
-
-				const parts = formatSelect.value.split("_");
-				const format = parts[0];
-				const extension = parts[1];
-				const exportTree = toggleInput.checked;
-
-				const orgId = getOrgId();
-				const conversation = new ClaudeConversation(orgId, conversationId);
-				const conversationData = await conversation.getData(exportTree);
-
-				const filename = `Claude_export_${conversationData.name}_${conversationId}.${extension}`;
-				const content = await formatExport(conversationData, format, conversationId);
-
-				const blob = new Blob([content], { type: 'text/plain' });
-				const url = URL.createObjectURL(blob);
-				const link = document.createElement('a');
-				link.href = url;
-				link.download = filename;
-				link.click();
-				URL.revokeObjectURL(url);
-
-				loadingModal.destroy();
-				modal.hide();
-			} catch (error) {
-				console.error('Export failed:', error);
-				loadingModal.destroy();
-				showClaudeAlert('Export Error', error.message || 'Failed to export conversation');
-			}
-		};
-
+		// Import button handler
 		importButton.onclick = () =>
 			handleImport(
 				modelSelect.value,
 				importFilesToggle.input.checked,
 				importToolCallsToggle.input.checked
 			);
+		//#endregion
+
+		//#region Replace phantom section (only if in conversation)
+		if (isInConversation) {
+			// Divider
+			const divider2 = document.createElement('hr');
+			divider2.className = 'my-4 border-border-300';
+			content.appendChild(divider2);
+
+			// Replace phantom messages section
+			const replaceLabel = document.createElement('label');
+			replaceLabel.className = CLAUDE_CLASSES.LABEL;
+			replaceLabel.textContent = 'Replace Phantom Messages';
+			content.appendChild(replaceLabel);
+
+			const replaceNote = document.createElement('p');
+			replaceNote.className = CLAUDE_CLASSES.TEXT_SM + ' text-text-400';
+			replaceNote.textContent = `Replaces the "fake" message history for this conversation.`;
+			content.appendChild(replaceNote);
+
+			const replaceButton = createClaudeButton('Replace from File', 'secondary');
+			replaceButton.className += ' mb-2';
+			content.appendChild(replaceButton);
+			replaceButton.onclick = () => handleReplacePhantom(replaceButton);
+
+			// Warning note
+			const warningNote = document.createElement('p');
+			warningNote.className = CLAUDE_CLASSES.TEXT_SM;
+			warningNote.style.color = '#de2929';
+			warningNote.innerHTML = '⚠️ <strong>Visual change only:</strong> This replaces what you see in the chat history. The AI\'s context (what it can actually read) remains unchanged.';
+			warningNote.className += ' mb-3';
+			content.appendChild(warningNote);
+		}
+		//#endregion
+
+		// Create modal with appropriate title
+		const modalTitle = isInConversation ? 'Export & Import' : 'Import Conversation';
+		const modal = new ClaudeModal(modalTitle, content);
+
+		// Override max width
+		modal.modal.style.maxWidth = '28rem';
 
 		modal.show();
 	}
@@ -857,8 +1026,8 @@
 	}
 
 	function initialize() {
-		tryAddTopRightButton("export-button", createExportButton, "Export/Import chat");
-		setInterval(() => tryAddTopRightButton('export-button', createExportButton, "Export/Import chat"), 1000);
+		tryAddTopRightButton("export-button", createExportButton, "Export/Import chat", false, true);
+		setInterval(() => tryAddTopRightButton('export-button', createExportButton, "Export/Import chat", false, true), 1000);
 	}
 
 	// Wait for dependencies to be available

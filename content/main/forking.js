@@ -594,6 +594,60 @@ If this is a writing or creative discussion, include sections for characters, pl
 		return ClaudeConversation.extractMessageText(assistantMessage);
 	}
 
+	// Splits oversized attachments into multiple attachments
+	function splitOversizedAttachment(attachment) {
+		const content = attachment.extracted_content || '';
+		const maxChars = LAST_CHUNK_SIZE * 4; // Reverse token estimation
+
+		console.log(`splitOversizedAttachment: "${attachment.file_name}", content length: ${content.length}, maxChars: ${maxChars}`);
+
+		if (content.length <= maxChars) {
+			console.log(`  -> No split needed, under limit`);
+			return [attachment];
+		}
+
+		console.log(`  -> Splitting attachment into parts...`);
+
+		const parts = [];
+		let remaining = content;
+		let partNum = 1;
+
+		// Parse original filename
+		const originalName = attachment.file_name || 'attachment.txt';
+		const dotIndex = originalName.lastIndexOf('.');
+		const baseName = dotIndex > 0 ? originalName.slice(0, dotIndex) : originalName;
+		const extension = dotIndex > 0 ? originalName.slice(dotIndex) : '.txt';
+
+		while (remaining.length > 0) {
+			let chunkEnd = Math.min(remaining.length, maxChars);
+
+			// Try to split at newline for cleaner breaks
+			if (chunkEnd < remaining.length) {
+				const lastNewline = remaining.lastIndexOf('\n', chunkEnd);
+				if (lastNewline > maxChars * 0.5) {
+					chunkEnd = lastNewline + 1;
+				}
+			}
+
+			const chunkText = remaining.slice(0, chunkEnd);
+			remaining = remaining.slice(chunkEnd);
+
+			parts.push({
+				id: crypto.randomUUID(),
+				file_name: `${baseName}_part${partNum}${extension}`,
+				file_size: chunkText.length,
+				file_type: attachment.file_type || "text/plain",
+				extracted_content: chunkText,
+				created_at: new Date().toISOString()
+			});
+
+			partNum++;
+		}
+
+		console.log(`  -> Split into ${parts.length} parts`);
+		return parts;
+	}
+
 	// Splits messages with too many attachments into multiple messages
 	function normalizeOversizedMessages(messages) {
 		const normalized = [];
@@ -601,23 +655,29 @@ If this is a writing or creative discussion, include sections for characters, pl
 		for (const msg of messages) {
 			const msgTokens = estimateTokens([msg]);
 
-			if (msgTokens <= LAST_CHUNK_SIZE || !msg.attachments || msg.attachments.length <= 1) {
+			if (msgTokens <= LAST_CHUNK_SIZE || !msg.attachments?.length) {
 				// Keep as-is: normal size, or can't split further
 				normalized.push(msg);
 				continue;
 			}
+
+			// Pre-split any oversized attachments
+			const processedAttachments = msg.attachments.flatMap(att =>
+				splitOversizedAttachment(att)
+			);
 
 			// Split attachments into chunks
 			const attachmentChunks = [];
 			let currentChunk = [];
 			let currentTokens = 0;
 
-			for (const attachment of msg.attachments) {
+			for (const attachment of processedAttachments) {
 				const attTokens = Math.ceil((attachment.extracted_content?.length || 0) / 4);
-				console.log(`Attachment tokens: ${attTokens} for attachment ${attachment.file_name}`);
+
+				// This should never happen after splitOversizedAttachment,
+				// but keep as a safety fallback
 				if (attTokens > LAST_CHUNK_SIZE) {
-					// Single attachment oversized, give it own message
-					console.warn('Single attachment exceeds max chunk size, placing in its own message:', attachment.file_name);
+					console.warn('Single attachment still exceeds max chunk size after splitting - this should not happen:', attachment.file_name);
 					if (currentChunk.length > 0) {
 						attachmentChunks.push(currentChunk);
 						currentChunk = [];
@@ -641,7 +701,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 				attachmentChunks.push(currentChunk);
 			}
 
-			// Create synthetic messages - split into multiple of same sender type
+			// Create synthetic messages - split into multiple pairs
 			console.log(`Splitting message ${msg.uuid} into ${attachmentChunks.length} chunks.`);
 
 			const originalSender = msg.sender;
@@ -698,7 +758,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 	async function chunkAndSummarize(orgId, messages) {
 		// Normalize messages first
 		messages = normalizeOversizedMessages(messages);
-
+		await showClaudePrompt("Stopping...")
 		// Collect ALL files/attachments/toolCalls from entire summarized section upfront
 		const allFiles = messages.flatMap(m => m.files_v2 || []);
 		const allAttachments = messages.flatMap(m => m.attachments || []);
