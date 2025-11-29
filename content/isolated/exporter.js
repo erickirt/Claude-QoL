@@ -22,6 +22,7 @@
 	};
 	const EXPORT_TAG_PREFIX = 'CLEXP:';
 	const TAG_REGEX = new RegExp(`^\\[${EXPORT_TAG_PREFIX}([\\da-zA-Z_-]+)(?::(\\d+))?\\]$`);
+	const ATTACHMENT_DELIMITER_REGEX = /\n*=====ATTACHMENT_BEGIN: .+?=====\n[\s\S]*?\n=====ATTACHMENT_END=====/g;
 
 	//#region Export format handlers
 	function formatTxtExport(conversationData, conversationId) {
@@ -72,9 +73,38 @@
 
 	function formatLibrechatExport(conversationData, conversationId) {
 		const processedMessages = conversationData.chat_messages.map((msg) => {
-			const contentText = ClaudeConversation.extractMessageText(msg);
+			let contentText = "";
 
-			return {
+			// Convert attachments to LibreChat file format AND embed inline
+			const files = [];
+
+			if (msg.attachments && msg.attachments.length > 0) {
+				for (const attachment of msg.attachments) {
+					const text = attachment.extracted_content || '';
+
+					// Add to files array (survives re-export, we can read it back)
+					files.push({
+						file_id: crypto.randomUUID(),
+						bytes: attachment.file_size || text.length || 0,
+						context: 'message_attachment',
+						filename: attachment.file_name || 'unknown',
+						object: 'file',
+						source: 'text',
+						text: text,
+						type: attachment.file_type || 'text/plain'
+					});
+
+					// Also embed inline (so LibreChat's AI can see it)
+					if (text && msg.sender === ROLES.USER.apiName) {
+						contentText += `\n=====ATTACHMENT_BEGIN: ${attachment.file_name || 'unknown'}=====\n`;
+						contentText += text;
+						contentText += `\n=====ATTACHMENT_END=====\n\n`;
+					}
+				}
+			}
+			contentText += ClaudeConversation.extractMessageText(msg);
+
+			const message = {
 				messageId: msg.uuid,
 				parentMessageId: msg.parent_message_uuid === "00000000-0000-4000-8000-000000000000"
 					? null
@@ -84,6 +114,12 @@
 				isCreatedByUser: msg.sender === ROLES.USER.apiName,
 				createdAt: msg.created_at
 			};
+
+			if (files.length > 0) {
+				message.files = files;
+			}
+
+			return message;
 		});
 
 		return JSON.stringify({
@@ -610,11 +646,9 @@
 	}
 
 	function extractLibrechatContent(msg) {
-		// If content array exists and has items, use it
 		if (msg.content && Array.isArray(msg.content) && msg.content.length > 0) {
 			return msg.content.map(block => {
 				if (block.type === 'think') {
-					// LibreChat "think" -> Claude "thinking"
 					return {
 						type: 'thinking',
 						thinking: block.think || ''
@@ -622,19 +656,17 @@
 				} else if (block.type === 'text') {
 					return {
 						type: 'text',
-						text: block.text || ''
+						text: (block.text || '').replace(ATTACHMENT_DELIMITER_REGEX, '').trim()
 					};
 				} else {
-					// Pass through unknown types as-is
 					return block;
 				}
 			});
 		}
 
-		// Fall back to text field
 		return [{
 			type: 'text',
-			text: msg.text || ''
+			text: (msg.text || '').replace(ATTACHMENT_DELIMITER_REGEX, '').trim()
 		}];
 	}
 
