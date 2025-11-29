@@ -534,7 +534,7 @@
 
 		// Send initial message
 		await conversation.sendMessageAndWaitForResponse(
-			"This conversation is imported from the attached chatlog.txt\nYou are Assistant. Simply say 'Acknowledged' and wait for user input.",
+			"This conversation is imported from the attached chatlog.txt\nSimply say 'Acknowledged' and wait for user input.",
 			{
 				model: model,
 				attachments: [chatlogAttachment],
@@ -567,6 +567,74 @@
 			modal.show();
 		});
 	}
+	//#region Raw JSON import
+	function parseRawClaudeJson(jsonText) {
+		const data = JSON.parse(jsonText);
+		const warnings = [];
+
+		if (!data.chat_messages || !Array.isArray(data.chat_messages)) {
+			throw new Error('Invalid Claude JSON format: missing chat_messages array');
+		}
+
+		if (!data.current_leaf_message_uuid) {
+			throw new Error('Invalid Claude JSON format: missing current_leaf_message_uuid');
+		}
+
+		// Build lookup map
+		const messageMap = new Map();
+		for (const msg of data.chat_messages) {
+			messageMap.set(msg.uuid, msg);
+		}
+
+		// Walk backward from leaf to root
+		const branch = [];
+		let current = messageMap.get(data.current_leaf_message_uuid);
+
+		while (current) {
+			branch.unshift(current);
+
+			const parentId = current.parent_message_uuid;
+			if (!parentId || parentId === '00000000-0000-4000-8000-000000000000') {
+				break;
+			}
+
+			current = messageMap.get(parentId);
+		}
+
+		if (branch.length === 0) {
+			throw new Error('Could not reconstruct message branch');
+		}
+
+		// Check for branches
+		const parentCounts = new Map();
+		for (const msg of data.chat_messages) {
+			const parentId = msg.parent_message_uuid || 'root';
+			parentCounts.set(parentId, (parentCounts.get(parentId) || 0) + 1);
+		}
+		const hasBranches = Array.from(parentCounts.values()).some(count => count > 1);
+
+		if (hasBranches) {
+			warnings.push('Multiple branches detected. Importing the current active branch.');
+		}
+
+		// Already in Claude format! Just need to rename fields
+		const chat_messages = branch.map(msg => ({
+			sender: msg.sender,
+			content: msg.content || [],
+			created_at: msg.created_at,
+			files_v2: msg.files_v2 || [],
+			files: msg.files || [],
+			attachments: msg.attachments || [],
+			sync_sources: msg.sync_sources || []
+		}));
+
+		return {
+			name: data.name || 'Imported Conversation',
+			chat_messages,
+			warnings
+		};
+	}
+	//#endregion
 
 	//#region LibreChat JSON import
 	function parseLibrechatJson(jsonText) {
@@ -737,7 +805,17 @@
 
 		try {
 			if (file.name.endsWith('.json')) {
-				parsedData = parseLibrechatJson(fileContent);
+				const jsonData = JSON.parse(fileContent);
+
+				if (jsonData.chat_messages && jsonData.current_leaf_message_uuid) {
+					// Raw Claude JSON
+					parsedData = parseRawClaudeJson(fileContent);
+				} else if (jsonData.messages) {
+					// LibreChat JSON
+					parsedData = parseLibrechatJson(fileContent);
+				} else {
+					throw new Error('Unrecognized JSON format');
+				}
 			} else {
 				parsedData = parseAndValidateText(fileContent);
 			}
@@ -978,18 +1056,18 @@
 		content.appendChild(importContainer);
 
 		// Add toggles
-		const importFilesToggle = createClaudeToggle('Import files/attachments (txt only)', true);
+		const importFilesToggle = createClaudeToggle('Import files/attachments', true);
 		importFilesToggle.container.classList.add('mb-2', 'mt-2');
 		content.appendChild(importFilesToggle.container);
 
-		const importToolCallsToggle = createClaudeToggle('Import tool calls (txt only)', false);
+		const importToolCallsToggle = createClaudeToggle('Import tool calls', false);
 		importToolCallsToggle.container.classList.add('mb-4');
 		content.appendChild(importToolCallsToggle.container);
 
 		// Import note
 		const note = document.createElement('p');
 		note.className = CLAUDE_CLASSES.TEXT_SM + ' text-text-400';
-		note.textContent = 'Imports txt (from this modal) and LibreChat JSON formats.';
+		note.textContent = 'Imports txt/JSON (from this modal) and LibreChat JSON.';
 		content.appendChild(note);
 
 		// Import button handler
