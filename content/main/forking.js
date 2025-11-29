@@ -221,19 +221,27 @@ If this is a writing or creative discussion, include sections for characters, pl
 			if (pendingFork.rawTextPercentage < 100) {
 				loadingModal.setContent(createLoadingContent('Generating conversation summary...'));
 
-				let split = Math.ceil(messages.length * pendingFork.rawTextPercentage / 100);
+				// Normalize FIRST - break up oversized messages
+				messages = normalizeOversizedMessages(messages);
+				console.log('Messages after normalization:', messages);
+				// NOW token-based splitting works at the right granularity
+				const totalTokens = estimateTokens(messages);
+				const targetKeepTokens = Math.ceil(totalTokens * pendingFork.rawTextPercentage / 100);
 
-				// Adjust split to ensure we cut before a user message
-				while (split < messages.length && messages[split].sender !== 'human') {
-					split++;
+				let keepCount = takeMessagesFromEnd(messages, targetKeepTokens, true);
+				let splitIndex = messages.length - keepCount;
+
+				// Adjust to ensure we cut before a user message
+				while (splitIndex < messages.length && messages[splitIndex].sender !== 'human') {
+					splitIndex++;
 				}
 
-				if (split >= messages.length) {
-					split = 0;
+				if (splitIndex >= messages.length) {
+					splitIndex = 0;
 				}
 
-				const toSummarize = messages.slice(0, messages.length - split);
-				const toKeep = messages.slice(messages.length - split);
+				const toSummarize = messages.slice(0, splitIndex);
+				const toKeep = messages.slice(splitIndex);
 
 				if (toSummarize.length > 0) {
 					const summaryMsgs = await chunkAndSummarize(orgId, toSummarize);
@@ -441,8 +449,8 @@ If this is a writing or creative discussion, include sections for characters, pl
 		);
 
 		const finalAttachments = [
-			...dedupedAttachments,
-			...forkAttachments
+			...forkAttachments,
+			...dedupedAttachments
 		];
 
 		/*const processedSyncSources = await Promise.all(
@@ -756,9 +764,6 @@ If this is a writing or creative discussion, include sections for characters, pl
 	}
 
 	async function chunkAndSummarize(orgId, messages) {
-		// Normalize messages first
-		messages = normalizeOversizedMessages(messages);
-		await showClaudePrompt("Stopping...")
 		// Collect ALL files/attachments/toolCalls from entire summarized section upfront
 		const allFiles = messages.flatMap(m => m.files_v2 || []);
 		const allAttachments = messages.flatMap(m => m.attachments || []);
