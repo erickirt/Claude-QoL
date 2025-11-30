@@ -4,7 +4,7 @@
 	const defaultSummaryPrompt =
 		`I've attached a chatlog from a previous conversation. Please create a complete, detailed summary of the conversation that covers all important points, questions, and responses. This summary will be used to continue the conversation in a new chat, so make sure it provides enough context to understand the full discussion. Be thorough, and think things through. Make it lengthy.
 If this is a technical discussion, include any relevant technical details, code snippets, or explanations that were part of the conversation, maintaining information concerning only the latest version of any code discussed.
-If this is a writing or creative discussion, include sections for characters, plot points, setting info, etcetera.`;
+If this is a writing or creative discussion, include sections for characters, plot points, setting info, etcetera. Avoid overusing bulletpoints - prose is preferred.`;
 
 	let pendingFork = {
 		model: null,
@@ -215,7 +215,12 @@ If this is a writing or creative discussion, include sections for characters, pl
 			const chatName = conversationData.name;
 			const projectUuid = conversationData.project?.uuid || null;
 
+			// Fetch existing phantom messages for this conversation
+			const existingPhantoms = await getPhantomMessagesFromMain(conversationId);
+			const phantomTokens = existingPhantoms.length > 0 ? estimateTokens(existingPhantoms) : 0;
+
 			let forkAttachments = [];
+			let phantomsToCarryOver = [];
 
 			// Apply summary if needed
 			if (pendingFork.rawTextPercentage < 100) {
@@ -224,6 +229,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 				// Normalize FIRST - break up oversized messages
 				messages = normalizeOversizedMessages(messages);
 				console.log('Messages after normalization:', messages);
+
 				// NOW token-based splitting works at the right granularity
 				const totalTokens = estimateTokens(messages);
 				const targetKeepTokens = Math.ceil(totalTokens * pendingFork.rawTextPercentage / 100);
@@ -243,6 +249,21 @@ If this is a writing or creative discussion, include sections for characters, pl
 				const toSummarize = messages.slice(0, splitIndex);
 				const toKeep = messages.slice(splitIndex);
 
+				// Calculate which phantoms to carry over
+				if (existingPhantoms.length > 0) {
+					const tokensToSummarize = estimateTokens(toSummarize);
+
+					if (tokensToSummarize < phantomTokens) {
+						// Split lands inside phantom range - some carry over
+						const phantomTokensToKeep = phantomTokens - tokensToSummarize;
+						const phantomKeepCount = takeMessagesFromEnd(existingPhantoms, phantomTokensToKeep, true);
+						phantomsToCarryOver = existingPhantoms.slice(-phantomKeepCount);
+						console.log(`Carrying over ${phantomsToCarryOver.length} phantom messages (${phantomTokensToKeep} tokens)`);
+					} else {
+						console.log('All phantom messages fall within summarized range, none carried over');
+					}
+				}
+
 				if (toSummarize.length > 0) {
 					const summaryMsgs = await chunkAndSummarize(orgId, toSummarize);
 
@@ -258,29 +279,49 @@ If this is a writing or creative discussion, include sections for characters, pl
 						file_type: "text/plain"
 					}));
 
-					if (toKeep.length > 0) {
-						toKeep[0] = { ...toKeep[0], parent_message_uuid: summaryMsgs.at(-1).uuid };
+					// Fix parent chains based on whether we have phantoms to carry over
+					if (phantomsToCarryOver.length > 0) {
+						// First carried-over phantom points to last summary message
+						phantomsToCarryOver[0] = {
+							...phantomsToCarryOver[0],
+							parent_message_uuid: summaryMsgs.at(-1).uuid
+						};
 
-						const chatlogText = toKeep.map(msg => formatMessageContent(msg)).join('\n\n');
-						forkAttachments.push({
-							extracted_content: chatlogText,
-							file_name: "chatlog.txt",
-							file_size: chatlogText.length,
-							file_type: "text/plain"
-						});
+						if (toKeep.length > 0) {
+							// First toKeep message points to last carried-over phantom
+							toKeep[0] = {
+								...toKeep[0],
+								parent_message_uuid: phantomsToCarryOver.at(-1).uuid
+							};
+
+							forkAttachments.push(getChatlogFromMessages(toKeep, false));
+						}
+					} else if (toKeep.length > 0) {
+						// Original behavior when no phantoms to carry over
+						toKeep[0] = { ...toKeep[0], parent_message_uuid: summaryMsgs.at(-1).uuid };
+						forkAttachments.push(getChatlogFromMessages(toKeep, false));
 					}
 
-					messages = [...summaryMsgs, ...toKeep];
+					// Build final message array: summaries -> carried phantoms -> kept real messages
+					messages = [...summaryMsgs, ...phantomsToCarryOver, ...toKeep];
 				}
 			} else {
 				// No summarization - full chatlog
-				const chatlogText = messages.map(msg => formatMessageContent(msg)).join('\n\n');
-				forkAttachments = [{
-					extracted_content: chatlogText,
-					file_name: "chatlog.txt",
-					file_size: chatlogText.length,
-					file_type: "text/plain"
-				}];
+				forkAttachments = [getChatlogFromMessages(messages, false)];
+
+				// 100% verbatim: carry over ALL existing phantoms
+				if (existingPhantoms.length > 0) {
+					console.log(`Carrying over all ${existingPhantoms.length} phantom messages (100% verbatim)`);
+
+					// First real message points to last existing phantom
+					if (messages.length > 0) {
+						messages[0] = {
+							...messages[0],
+							parent_message_uuid: existingPhantoms.at(-1).uuid
+						};
+					}
+					messages = [...existingPhantoms, ...messages];
+				}
 			}
 
 			loadingModal.setContent(createLoadingContent('Creating forked conversation...'));
@@ -291,7 +332,11 @@ If this is a writing or creative discussion, include sections for characters, pl
 					...msg,
 					files_v2: [],
 					files: [],
-					attachments: []
+					attachments: (msg.attachments || []).filter(att =>
+						att.file_name === 'chatlog.txt' ||
+						att.file_name?.startsWith('chatlog_part') ||
+						att.file_name?.startsWith('summary_chunk_')
+					)
 				}));
 			}
 
@@ -384,6 +429,114 @@ If this is a writing or creative discussion, include sections for characters, pl
 
 		return parts.join('\n\n');
 	}
+
+	function cleanupMessages(messages) {
+		const cleaned = [...messages];
+
+		// Step 1: Remove synthetic normalization pairs
+		let i = 0;
+		while (i < cleaned.length) {
+			const msg = cleaned[i];
+			const text = msg.content?.[0]?.text || '';
+
+			if (text === '[Continued attachments from previous message]') {
+				const expectedAckSender = msg.sender === 'human' ? 'assistant' : 'human';
+				const prevMsg = cleaned[i - 1];
+				const prevText = prevMsg?.content?.[0]?.text || '';
+
+				const hasPrevAck = i > 0 &&
+					prevMsg.sender === expectedAckSender &&
+					prevText === 'Acknowledged.';
+
+
+				if (hasPrevAck) {
+					cleaned.splice(i - 1, 2);
+					i--;
+				} else {
+					cleaned.splice(i, 1);
+				}
+			} else {
+				i++;
+			}
+		}
+
+
+		// Step 2: Fix consecutive same-sender messages
+		i = 0;
+		while (i < cleaned.length - 1) {
+			const current = cleaned[i];
+			const next = cleaned[i + 1];
+
+			if (current.sender === next.sender) {
+
+				const fillerSender = current.sender === 'human' ? 'assistant' : 'human';
+				const fillerText = fillerSender === 'assistant' ? 'Acknowledged.' : 'Continue.';
+
+				const fillerMessage = {
+					uuid: crypto.randomUUID(),
+					parent_message_uuid: current.uuid,
+					sender: fillerSender,
+					content: [{ type: 'text', text: fillerText }],
+					created_at: current.created_at || new Date().toISOString(),
+					files_v2: [],
+					files: [],
+					attachments: [],
+					sync_sources: []
+				};
+
+				// Fix next message's parent to point to filler
+				next.parent_message_uuid = fillerMessage.uuid;
+
+				cleaned.splice(i + 1, 0, fillerMessage);
+				i += 2;
+			} else {
+				i++;
+			}
+		}
+
+		return cleaned;
+	}
+
+	function getChatlogFromMessages(messages, includeRoleLabels = true) {
+		const cleaned = cleanupMessages(messages);
+
+		const chatlogText = cleaned.map(msg => {
+			const role = msg.sender === 'human' ? '[User]' : '[Assistant]';
+			const text = formatMessageContent(msg);
+			return includeRoleLabels ? `${role}\n${text}` : text;
+		}).join('\n\n');
+
+		return {
+			extracted_content: chatlogText,
+			file_name: "chatlog.txt",
+			file_size: chatlogText.length,
+			file_type: "text/plain"
+		};
+	}
+
+	async function getPhantomMessagesFromMain(conversationId) {
+		return new Promise((resolve) => {
+			const handler = (event) => {
+				if (event.data.type === 'PHANTOM_MESSAGES_RESPONSE' &&
+					event.data.conversationId === conversationId) {
+					window.removeEventListener('message', handler);
+					resolve(event.data.messages || []);
+				}
+			};
+
+			window.addEventListener('message', handler);
+			window.postMessage({
+				type: 'GET_PHANTOM_MESSAGES_IDB',
+				conversationId
+			}, '*');
+
+			// Timeout fallback
+			setTimeout(() => {
+				window.removeEventListener('message', handler);
+				resolve([]);
+			}, 5000);
+		});
+	}
 	//#endregion
 
 	//#region Fork creation
@@ -427,7 +580,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 
 		const conversation = new ClaudeConversation(orgId);
 		const newUuid = await conversation.create(newName, model, projectUuid);
-		await storePhantomMessagesAndWait(newUuid, messages);
+		await storePhantomMessagesAndWait(newUuid, cleanupMessages(messages));
 
 		// Just collect what's in the messages (already filtered)
 		const allFiles = messages.flatMap(m => m.files_v2 || []);
@@ -557,12 +710,6 @@ If this is a writing or creative discussion, include sections for characters, pl
 		// Build prompt
 		const fullPrompt = buildSummaryPrompt(priorSummaryTexts.length, includeAttachments);
 
-		// Format messages as chatlog
-		const chatlogText = messages.map((msg) => {
-			const role = msg.sender === 'human' ? '[User]' : '[Assistant]';
-			const text = formatMessageContent(msg);
-			return `${role}\n${text}`;
-		}).join('\n\n');
 
 		// Download and upload files
 		const downloadedFiles = await downloadFiles(files.map(f => ({
@@ -585,12 +732,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 				file_type: "text/plain"
 			})),
 			...attachments,
-			{
-				extracted_content: chatlogText,
-				file_name: "chatlog.txt",
-				file_size: chatlogText.length,
-				file_type: "text/plain"
-			}
+			getChatlogFromMessages(messages, true)
 		];
 
 		// Get summary using the passed conversation
@@ -934,9 +1076,19 @@ If this is a writing or creative discussion, include sections for characters, pl
 
 			// Indicator text - larger and more visible
 			const indicator = document.createElement('div');
-			indicator.className = 'mb-3 text-text-200 text-center text-lg font-semibold';
+			indicator.className = 'mb-1 text-text-200 text-center text-lg font-semibold';
 			indicator.textContent = `Summary 1 of ${summaryTexts.length}`;
 			content.appendChild(indicator);
+
+			// Token counter
+			const tokenCounter = document.createElement('div');
+			tokenCounter.className = 'mb-3 text-text-300 text-center text-sm';
+			content.appendChild(tokenCounter);
+
+			function updateTokenCount(text) {
+				const tokens = Math.ceil(text.length / 4);
+				tokenCounter.textContent = `~${tokens.toLocaleString()} tokens`;
+			}
 
 			// Create all textareas (only first visible)
 			const textareas = summaryTexts.map((text, i) => {
@@ -946,9 +1098,17 @@ If this is a writing or creative discussion, include sections for characters, pl
 				textarea.rows = 18;
 				textarea.style.resize = 'vertical';
 				textarea.style.display = i === 0 ? 'block' : 'none';
+				textarea.addEventListener('input', () => {
+					if (i === currentIndex) {
+						updateTokenCount(textarea.value);
+					}
+				});
 				content.appendChild(textarea);
 				return textarea;
 			});
+
+			// Initialize token count
+			updateTokenCount(textareas[0].value);
 
 			let currentIndex = 0;
 
@@ -984,6 +1144,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 
 			function updateNavigation() {
 				indicator.textContent = `Summary ${currentIndex + 1} of ${summaryTexts.length}`;
+				updateTokenCount(textareas[currentIndex].value);
 
 				leftBtn.disabled = currentIndex === 0;
 				leftBtn.style.opacity = leftBtn.disabled ? '0.5' : '1';
@@ -1038,13 +1199,6 @@ If this is a writing or creative discussion, include sections for characters, pl
 					// Get chunk for current summary
 					const chunk = chunks[currentIndex];
 
-					// Format chatlog
-					const chatlogText = chunk.map(msg => {
-						const role = msg.sender === 'human' ? '[User]' : '[Assistant]';
-						const text = formatMessageContent(msg);
-						return `${role}\n${text}`;
-					}).join('\n\n');
-
 					// Collect files from chunk
 					const files = chunk.flatMap(m => m.files_v2 || []);
 					const attachments = chunk.flatMap(m => m.attachments || []);
@@ -1080,12 +1234,7 @@ Provide the complete rewritten summary.`;
 					const allAttachments = [
 						...previousSummaryAttachments,
 						...attachments,
-						{
-							extracted_content: chatlogText,
-							file_name: "chatlog.txt",
-							file_size: chatlogText.length,
-							file_type: "text/plain"
-						}
+						getChatlogFromMessages(chunk, true)
 					];
 
 					const assistantMessage = await tempConversation.sendMessageAndWaitForResponse(prompt, {
