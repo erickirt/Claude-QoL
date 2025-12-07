@@ -257,6 +257,183 @@ class ClaudeConversation {
 	}
 }
 
+// File type constants
+const MIME_TYPES = {
+	'png': 'image/png',
+	'jpg': 'image/jpeg',
+	'jpeg': 'image/jpeg',
+	'gif': 'image/gif',
+	'webp': 'image/webp',
+	'svg': 'image/svg+xml',
+	'pdf': 'application/pdf',
+};
+
+const DIRECT_UPLOAD_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'pdf'];
+
+class ClaudeFile {
+	constructor(apiData) {
+		this.file_uuid = apiData.file_uuid;
+		this.file_name = apiData.file_name;
+		this.file_kind = apiData.file_kind; // 'image' | 'document'
+		this.preview_asset = apiData.preview_asset || null;
+		this.document_asset = apiData.document_asset || null;
+		this.thumbnail_asset = apiData.thumbnail_asset || null;
+		this.preview_url = apiData.preview_url || null;
+		this.thumbnail_url = apiData.thumbnail_url || null;
+	}
+
+	getDownloadUrl() {
+		// Try preview first (images)
+		if (this.preview_asset?.url) {
+			return this.preview_asset.url;
+		}
+
+		// Try document (PDFs, etc.)
+		if (this.document_asset?.url) {
+			return this.document_asset.url;
+		}
+
+		// Try direct URLs
+		if (this.preview_url) {
+			return this.preview_url;
+		}
+
+		// Last resort: thumbnail
+		if (this.thumbnail_asset?.url) {
+			return this.thumbnail_asset.url;
+		}
+
+		if (this.thumbnail_url) {
+			return this.thumbnail_url;
+		}
+
+		return null;
+	}
+
+	async download() {
+		const url = this.getDownloadUrl();
+		if (!url) {
+			return null;
+		}
+
+		const response = await fetch(url);
+		if (!response.ok) {
+			throw new Error(`Failed to download file ${this.file_name}`);
+		}
+
+		return await response.blob();
+	}
+
+	async reupload(orgId) {
+		const blob = await this.download();
+		if (!blob) {
+			return null;
+		}
+		return ClaudeFile.upload(orgId, blob, this.file_name);
+	}
+
+	toApiFormat() {
+		return {
+			file_uuid: this.file_uuid,
+			file_name: this.file_name,
+			file_kind: this.file_kind,
+			preview_asset: this.preview_asset,
+			document_asset: this.document_asset,
+			thumbnail_asset: this.thumbnail_asset,
+			preview_url: this.preview_url,
+			thumbnail_url: this.thumbnail_url
+		};
+	}
+
+	static async upload(orgId, blob, fileName) {
+		const ext = fileName.toLowerCase().split('.').pop();
+
+		if (DIRECT_UPLOAD_EXTENSIONS.includes(ext)) {
+			// Regular file upload
+			const mimeType = MIME_TYPES[ext] || 'application/octet-stream';
+			const typedBlob = new Blob([blob], { type: mimeType });
+
+			const formData = new FormData();
+			formData.append('file', typedBlob, fileName);
+
+			const response = await fetch(`/api/${orgId}/upload`, {
+				method: 'POST',
+				body: formData
+			});
+
+			if (!response.ok) {
+				throw new Error(`Failed to upload file ${fileName}`);
+			}
+
+			const data = await response.json();
+			return new ClaudeFile(data);
+		} else {
+			// Document conversion -> returns ClaudeAttachment
+			const formData = new FormData();
+			formData.append('file', blob, fileName);
+
+			const response = await fetch(`/api/${orgId}/convert_document`, {
+				method: 'POST',
+				body: formData
+			});
+
+			if (!response.ok) {
+				throw new Error(`Failed to convert document ${fileName}`);
+			}
+
+			const data = await response.json();
+			return new ClaudeAttachment(data);
+		}
+	}
+
+	static fromJSON(json) {
+		return new ClaudeFile(json);
+	}
+}
+
+class ClaudeAttachment {
+	constructor({ extracted_content, file_name, file_size, file_type }) {
+		this.extracted_content = extracted_content;
+		this.file_name = file_name;
+		this.file_size = file_size;
+		this.file_type = file_type;
+	}
+
+	toApiFormat() {
+		return {
+			extracted_content: this.extracted_content,
+			file_name: this.file_name,
+			file_size: this.file_size,
+			file_type: this.file_type
+		};
+	}
+
+	static fromText(text, fileName, fileType = 'text/plain') {
+		return new ClaudeAttachment({
+			extracted_content: text,
+			file_name: fileName,
+			file_size: text.length,
+			file_type: fileType
+		});
+	}
+
+	static fromJSON(json) {
+		return new ClaudeAttachment(json);
+	}
+}
+
+class DownloadedFile {
+	constructor({ originalUuid, blob, fileName }) {
+		this.originalUuid = originalUuid;
+		this.blob = blob;
+		this.fileName = fileName;
+	}
+
+	async upload(orgId) {
+		return ClaudeFile.upload(orgId, this.blob, this.fileName);
+	}
+}
+
 class ClaudeProject {
 	constructor(orgId, projectId) {
 		this.orgId = orgId;
@@ -502,10 +679,21 @@ async function updateAccountSettings(settings) {
 	return await response.json();
 }
 
-// File operations
+// File operations (legacy - consider migrating to ClaudeFile.upload)
 async function uploadFile(orgId, file) {
+	// Blob types need document conversion, not file upload
+	if (file.kind === 'blob') {
+		const attachment = await convertDocument(orgId, file);
+		return { type: 'attachment', data: attachment };
+	}
+	console.log(`Uploading file: ${JSON.stringify(file)}`);
+	const ext = file.name.toLowerCase().split('.').pop();
+	const mimeType = MIME_TYPES[ext] || 'application/octet-stream';
+	const typedBlob = new Blob([file.data], { type: mimeType });
+
 	const formData = new FormData();
-	formData.append('file', file.data, file.name);
+	formData.append('file', typedBlob, file.name);
+
 	const response = await fetch(`/api/${orgId}/upload`, {
 		method: 'POST',
 		body: formData
@@ -515,9 +703,25 @@ async function uploadFile(orgId, file) {
 		throw new Error(`Failed to upload file ${file.name}`);
 	}
 
-	const uploadResult = await response.json();
-	return uploadResult;
+	return { type: 'file', data: await response.json() };
 }
+
+async function convertDocument(orgId, file) {
+	const formData = new FormData();
+	formData.append('file', file.data, file.name);
+
+	const response = await fetch(`/api/${orgId}/convert_document`, {
+		method: 'POST',
+		body: formData
+	});
+
+	if (!response.ok) {
+		throw new Error(`Failed to convert document ${file.name}`);
+	}
+
+	return await response.json();
+}
+
 
 async function downloadFile(url) {
 	const response = await fetch(url);
@@ -622,3 +826,37 @@ const CLAUDE_MODELS = [
 
 const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-5-20250929';
 const FAST_MODEL = 'claude-haiku-4-5-20251001';
+
+// Formats a message for inclusion in chatlog.txt attachment
+// Does NOT do filtering - filter out unwanted content (tool calls, files) beforehand
+function formatMessageForChatlog(message) {
+	const parts = [];
+
+	// Whitelist of content types to include
+	const allowedContentTypes = ['text', 'tool_use', 'tool_result'];
+
+	// Format content
+	for (const item of message.content) {
+		if (!allowedContentTypes.includes(item.type)) {
+			continue; // Skip thinking, etc.
+		}
+
+		if (item.type === 'text') {
+			parts.push(item.text);
+		} else {
+			parts.push(JSON.stringify(item));
+		}
+	}
+
+	// Dump files_v2 as JSON
+	if (message.files_v2 && message.files_v2.length > 0) {
+		parts.push(JSON.stringify(message.files_v2));
+	}
+
+	// Dump attachments as JSON
+	if (message.attachments && message.attachments.length > 0) {
+		parts.push(JSON.stringify(message.attachments));
+	}
+
+	return parts.join('\n\n');
+}

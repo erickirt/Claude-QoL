@@ -47,7 +47,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 			const messageUuid = messageContainer?.dataset.messageUuid;
 
 			if (!messageUuid) {
-				showClaudeAlert('Error', 'Could not find message UUID');
+				showClaudeAlert('Error', 'Could not find message UUID - try reloading the page.');
 				return;
 			}
 
@@ -247,7 +247,10 @@ If this is a writing or creative discussion, include sections for characters, pl
 				}
 
 				const toSummarize = messages.slice(0, splitIndex);
-				const toKeep = messages.slice(splitIndex);
+				let toKeep = messages.slice(splitIndex);
+
+				// Filter toKeep based on toggles (affects both chatlog and phantom messages)
+				toKeep = filterMessagesForChatlog(toKeep, pendingFork.includeAttachments, pendingFork.includeToolCalls);
 
 				// Calculate which phantoms to carry over
 				if (existingPhantoms.length > 0) {
@@ -272,12 +275,9 @@ If this is a writing or creative discussion, include sections for characters, pl
 						.filter((_, i) => i % 2 === 0)
 						.map(m => m.content[0].text);
 
-					forkAttachments = summaryTexts.map((text, i) => ({
-						extracted_content: text,
-						file_name: `summary_chunk_${i + 1}.txt`,
-						file_size: text.length,
-						file_type: "text/plain"
-					}));
+					forkAttachments = summaryTexts.map((text, i) =>
+						ClaudeAttachment.fromText(text, `summary_chunk_${i + 1}.txt`).toApiFormat()
+					);
 
 					// Fix parent chains based on whether we have phantoms to carry over
 					if (phantomsToCarryOver.length > 0) {
@@ -307,6 +307,8 @@ If this is a writing or creative discussion, include sections for characters, pl
 				}
 			} else {
 				// No summarization - full chatlog
+				// Filter messages based on toggles (affects both chatlog and phantom messages)
+				messages = filterMessagesForChatlog(messages, pendingFork.includeAttachments, pendingFork.includeToolCalls);
 				forkAttachments = [getChatlogFromMessages(messages, false)];
 
 				// 100% verbatim: carry over ALL existing phantoms
@@ -411,25 +413,6 @@ If this is a writing or creative discussion, include sections for characters, pl
 		};
 	}
 
-	function formatMessageContent(message) {
-		if (!message.content || !Array.isArray(message.content)) {
-			return '';
-		}
-
-		const parts = [];
-
-		for (const item of message.content) {
-			if (item.type === 'text') {
-				parts.push(item.text);
-			} else if (item.type === 'tool_use' || item.type === 'tool_result') {
-				parts.push(JSON.stringify(item, null, 2));
-			}
-			// Could add more types here later (thinking, etc.)
-		}
-
-		return parts.join('\n\n');
-	}
-
 	function cleanupMessages(messages) {
 		const cleaned = [...messages];
 
@@ -497,12 +480,36 @@ If this is a writing or creative discussion, include sections for characters, pl
 		return cleaned;
 	}
 
+	function filterMessagesForChatlog(messages, includeFiles, includeToolCalls) {
+		let filtered = messages;
+
+		if (!includeFiles) {
+			filtered = filtered.map(msg => ({
+				...msg,
+				files_v2: [],
+				files: [],
+				attachments: []
+			}));
+		}
+
+		if (!includeToolCalls) {
+			filtered = filtered.map(msg => ({
+				...msg,
+				content: msg.content.filter(item =>
+					item.type !== 'tool_use' && item.type !== 'tool_result'
+				)
+			}));
+		}
+
+		return filtered;
+	}
+
 	function getChatlogFromMessages(messages, includeRoleLabels = true) {
 		const cleaned = cleanupMessages(messages);
 
 		const chatlogText = cleaned.map(msg => {
 			const role = msg.sender === 'human' ? '[User]' : '[Assistant]';
-			const text = formatMessageContent(msg);
+			const text = formatMessageForChatlog(msg);
 			return includeRoleLabels ? `${role}\n${text}` : text;
 		}).join('\n\n');
 
@@ -582,28 +589,27 @@ If this is a writing or creative discussion, include sections for characters, pl
 		const newUuid = await conversation.create(newName, model, projectUuid);
 		await storePhantomMessagesAndWait(newUuid, cleanupMessages(messages));
 
-		// Just collect what's in the messages (already filtered)
+		// Collect files from messages (attachments are serialized into chatlog, not forwarded separately)
 		const allFiles = messages.flatMap(m => m.files_v2 || []);
-		const allAttachments = messages.flatMap(m => m.attachments || []);
-
 		const dedupedFiles = deduplicateByFilename(allFiles);
-		const dedupedAttachments = deduplicateByFilename(allAttachments);
 
-		// Download and upload files
-		const downloadedFiles = await downloadFiles(dedupedFiles.map(f => ({
-			uuid: f.file_uuid,
-			url: f.file_kind === "image" ? f.preview_asset.url : f.document_asset.url,
-			kind: f.file_kind,
-			name: f.file_name
-		})));
-
-		const finalFiles = await Promise.all(
-			downloadedFiles.map(file => uploadFile(orgId, file).then(meta => meta.file_uuid))
+		// Download and re-upload files
+		const uploadResults = await Promise.all(
+			dedupedFiles.map(f => new ClaudeFile(f).reupload(orgId))
 		);
+
+		const finalFiles = uploadResults
+			.filter(r => r instanceof ClaudeFile)
+			.map(r => r.file_uuid);
+
+		// Files that couldn't be uploaded as files get converted to attachments
+		const convertedAttachments = uploadResults
+			.filter(r => r instanceof ClaudeAttachment)
+			.map(r => r.toApiFormat());
 
 		const finalAttachments = [
 			...forkAttachments,
-			...dedupedAttachments
+			...convertedAttachments
 		];
 
 		/*const processedSyncSources = await Promise.all(
@@ -711,27 +717,26 @@ If this is a writing or creative discussion, include sections for characters, pl
 		const fullPrompt = buildSummaryPrompt(priorSummaryTexts.length, includeAttachments);
 
 
-		// Download and upload files
-		const downloadedFiles = await downloadFiles(files.map(f => ({
-			uuid: f.file_uuid,
-			url: f.file_kind === "image" ? f.preview_asset.url : f.document_asset.url,
-			kind: f.file_kind,
-			name: f.file_name
-		})));
-
-		const uploadedFileUuids = await Promise.all(
-			downloadedFiles.map(file => uploadFile(tempConversation.orgId, file).then(meta => meta.file_uuid))
+		// Download and re-upload files
+		const uploadResults = await Promise.all(
+			files.map(f => new ClaudeFile(f).reupload(tempConversation.orgId))
 		);
+
+		const uploadedFileUuids = uploadResults
+			.filter(r => r instanceof ClaudeFile)
+			.map(r => r.file_uuid);
+
+		const convertedAtts = uploadResults
+			.filter(r => r instanceof ClaudeAttachment)
+			.map(r => r.toApiFormat());
 
 		// Build attachments array
 		const summaryAttachments = [
-			...priorSummaryTexts.map((text, index) => ({
-				extracted_content: text,
-				file_name: `summary_chunk_${index + 1}.txt`,
-				file_size: text.length,
-				file_type: "text/plain"
-			})),
+			...priorSummaryTexts.map((text, index) =>
+				ClaudeAttachment.fromText(text, `summary_chunk_${index + 1}.txt`).toApiFormat()
+			),
 			...attachments,
+			...convertedAtts,
 			getChatlogFromMessages(messages, true)
 		];
 
@@ -1188,12 +1193,9 @@ If this is a writing or creative discussion, include sections for characters, pl
 					// Previous summaries from textareas (includes user edits)
 					const previousSummaryAttachments = [];
 					for (let i = 0; i < currentIndex; i++) {
-						previousSummaryAttachments.push({
-							extracted_content: textareas[i].value,
-							file_name: `summary_chunk_${i + 1}.txt`,
-							file_size: textareas[i].value.length,
-							file_type: "text/plain"
-						});
+						previousSummaryAttachments.push(
+							ClaudeAttachment.fromText(textareas[i].value, `summary_chunk_${i + 1}.txt`).toApiFormat()
+						);
 					}
 
 					// Get chunk for current summary
@@ -1203,19 +1205,18 @@ If this is a writing or creative discussion, include sections for characters, pl
 					const files = chunk.flatMap(m => m.files_v2 || []);
 					const attachments = chunk.flatMap(m => m.attachments || []);
 
-					// Download and upload files
-					const downloadedFiles = await downloadFiles(files.map(f => ({
-						uuid: f.file_uuid,
-						url: f.file_kind === "image" ? f.preview_asset.url : f.document_asset.url,
-						kind: f.file_kind,
-						name: f.file_name
-					})));
-
-					const uploadedFileUuids = await Promise.all(
-						downloadedFiles.map(file =>
-							uploadFile(tempConversation.orgId, file).then(meta => meta.file_uuid)
-						)
+					// Download and re-upload files
+					const uploadResults = await Promise.all(
+						files.map(f => new ClaudeFile(f).reupload(tempConversation.orgId))
 					);
+
+					const uploadedFileUuids = uploadResults
+						.filter(r => r instanceof ClaudeFile)
+						.map(r => r.file_uuid);
+
+					const convertedAtts = uploadResults
+						.filter(r => r instanceof ClaudeAttachment)
+						.map(r => r.toApiFormat());
 
 					// Build prompt
 					const prompt = `\`\`\`
@@ -1234,6 +1235,7 @@ Provide the complete rewritten summary.`;
 					const allAttachments = [
 						...previousSummaryAttachments,
 						...attachments,
+						...convertedAtts,
 						getChatlogFromMessages(chunk, true)
 					];
 

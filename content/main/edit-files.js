@@ -673,14 +673,17 @@
 
 			try {
 				// Upload and get full metadata back
-				const fileMetadata = await uploadFile(orgId, {
-					data: file,
-					name: file.name
-				});
+				const result = await ClaudeFile.upload(orgId, file, file.name);
 
-				// Replace uploading item with real file item that has thumbnail
-				const realFileItem = buildFileItem(fileMetadata);
-				uploadingItem.replaceWith(realFileItem);
+				// Replace uploading item with real file/attachment item
+				let itemElement;
+				if (result instanceof ClaudeFile) {
+					itemElement = buildFileItem(result.toApiFormat());
+				} else {
+					// Document was converted to attachment
+					itemElement = buildAttachmentItem(result.toApiFormat());
+				}
+				uploadingItem.replaceWith(itemElement);
 
 				// Decrement and update button
 				remainingUploads--;

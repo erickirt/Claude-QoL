@@ -47,15 +47,15 @@
 			}
 
 			// Files/attachments (user messages only)
-			if (message.sender === ROLES.USER.apiName) {
-				if (message.files_v2 && message.files_v2.length > 0) {
-					output += `[${EXPORT_TAG_PREFIX}files_v2]\n${JSON.stringify(message.files_v2)}\n\n`;
-				}
-
-				if (message.attachments && message.attachments.length > 0) {
-					output += `[${EXPORT_TAG_PREFIX}attachments]\n${JSON.stringify(message.attachments)}\n\n`;
-				}
+			//if (message.sender === ROLES.USER.apiName) {
+			if (message.files_v2 && message.files_v2.length > 0) {
+				output += `[${EXPORT_TAG_PREFIX}files_v2]\n${JSON.stringify(message.files_v2)}\n\n`;
 			}
+
+			if (message.attachments && message.attachments.length > 0) {
+				output += `[${EXPORT_TAG_PREFIX}attachments]\n${JSON.stringify(message.attachments)}\n\n`;
+			}
+			//}
 		}
 
 		return output;
@@ -73,10 +73,9 @@
 
 	function formatLibrechatExport(conversationData, conversationId) {
 		const processedMessages = conversationData.chat_messages.map((msg) => {
-			let contentText = "";
-
-			// Convert attachments to LibreChat file format AND embed inline
+			// Convert attachments to LibreChat file format
 			const files = [];
+			let attachmentText = '';
 
 			if (msg.attachments && msg.attachments.length > 0) {
 				for (const attachment of msg.attachments) {
@@ -95,21 +94,49 @@
 					});
 
 					// Also embed inline (so LibreChat's AI can see it)
-					if (text && msg.sender === ROLES.USER.apiName) {
-						contentText += `\n=====ATTACHMENT_BEGIN: ${attachment.file_name || 'unknown'}=====\n`;
-						contentText += text;
-						contentText += `\n=====ATTACHMENT_END=====\n\n`;
+					if (text) {
+						attachmentText += `\n=====ATTACHMENT_BEGIN: ${attachment.file_name || 'unknown'}=====\n`;
+						attachmentText += text;
+						attachmentText += `\n=====ATTACHMENT_END=====\n\n`;
 					}
 				}
 			}
-			contentText += ClaudeConversation.extractMessageText(msg);
+
+			// Build content array with only think and text types
+			const content = [];
+
+			for (const item of msg.content) {
+				if (item.type === 'thinking') {
+					content.push({
+						type: 'think',
+						think: item.thinking || ''
+					});
+				} else if (item.type === 'text') {
+					content.push({
+						type: 'text',
+						text: item.text || ''
+					});
+				}
+				// Skip all other types (tool_use, tool_result, etc.)
+			}
+
+			// Prepend attachment text to first text block (for user messages)
+			if (attachmentText) {
+				const firstTextIndex = content.findIndex(c => c.type === 'text');
+				if (firstTextIndex !== -1) {
+					content[firstTextIndex].text = attachmentText + content[firstTextIndex].text;
+				} else {
+					// No text block found, create one at the start
+					content.unshift({ type: 'text', text: attachmentText.trim() });
+				}
+			}
 
 			const message = {
 				messageId: msg.uuid,
 				parentMessageId: msg.parent_message_uuid === "00000000-0000-4000-8000-000000000000"
 					? null
 					: msg.parent_message_uuid,
-				text: contentText,
+				content: content,
 				sender: msg.sender === ROLES.ASSISTANT.apiName ? ROLES.ASSISTANT.librechatName : ROLES.USER.librechatName,
 				isCreatedByUser: msg.sender === ROLES.USER.apiName,
 				createdAt: msg.created_at
@@ -136,9 +163,72 @@
 	function formatRawExport(conversationData, conversationId) {
 		return JSON.stringify(conversationData, null, 2);
 	}
+
+	function buildZipFilename(uuid, filename) {
+		const lastDot = filename.lastIndexOf('.');
+		if (lastDot === -1) {
+			return `${filename}-${uuid}`;
+		}
+		const name = filename.substring(0, lastDot);
+		const ext = filename.substring(lastDot);
+		return `${name}-${uuid}${ext}`;
+	}
+
+	async function formatZipExport(conversationData, conversationId, loadingModal) {
+		const zip = new JSZip();
+
+		// Generate the txt content
+		const txtContent = formatTxtExport(conversationData, conversationId);
+		zip.file('conversation.txt', txtContent);
+
+		// Collect all files_v2 from messages as ClaudeFile instances
+		const allFiles = conversationData.chat_messages.flatMap(msg =>
+			(msg.files_v2 || []).map(f => new ClaudeFile(f))
+		).filter(f => f.getDownloadUrl());
+
+		// Phase 1: Download all files first
+		const filesToZipUp = [];
+		for (let i = 0; i < allFiles.length; i++) {
+			const file = allFiles[i];
+
+			if (loadingModal) {
+				loadingModal.setContent(createLoadingContent(`Downloading file ${i + 1}/${allFiles.length}: ${file.file_name}`));
+			}
+
+			try {
+				const blob = await file.download();
+				if (!blob) {
+					console.log(`No download URL for ${file.file_name}, skipping`);
+					continue;
+				}
+				const base64 = await new Promise((resolve) => {
+					const reader = new FileReader();
+					reader.onloadend = () => resolve(reader.result.split(',')[1]);
+					reader.readAsDataURL(blob);
+				});
+				filesToZipUp.push({
+					name: `files/${buildZipFilename(file.file_uuid, file.file_name)}`,
+					data: base64
+				});
+			} catch (error) {
+				console.log(`Failed to download ${file.file_name}:`, error);
+			}
+		}
+
+		// Phase 2: Add all files to zip
+		if (loadingModal) {
+			loadingModal.setContent(createLoadingContent('Creating zip file...'));
+		}
+
+		for (const file of filesToZipUp) {
+			zip.file(file.name, file.data, { base64: true });
+		}
+
+		return await zip.generateAsync({ type: 'blob' });
+	}
 	//#endregion
 
-	async function formatExport(conversationData, format, conversationId) {
+	async function formatExport(conversationData, format, conversationId, loadingModal) {
 		switch (format) {
 			case 'txt':
 				return formatTxtExport(conversationData, conversationId);
@@ -148,39 +238,14 @@
 				return formatLibrechatExport(conversationData, conversationId);
 			case 'raw':
 				return formatRawExport(conversationData, conversationId);
+			case 'zip':
+				return formatZipExport(conversationData, conversationId, loadingModal);
 			default:
 				throw new Error(`Unsupported format: ${format}`);
 		}
 	}
 
 	//#region File handling for import
-	function getFileDownloadUrl(file) {
-		// Try preview first (images)
-		if (file.preview_asset?.url) {
-			return file.preview_asset.url;
-		}
-
-		// Try document (PDFs, etc.)
-		if (file.document_asset?.url) {
-			return file.document_asset.url;
-		}
-
-		// Find any asset that isn't thumbnail
-		const assetKeys = Object.keys(file).filter(k => k.endsWith('_asset') && k !== 'thumbnail_asset');
-		for (const key of assetKeys) {
-			if (file[key]?.url) {
-				return file[key].url;
-			}
-		}
-
-		// Last resort: thumbnail
-		if (file.thumbnail_asset?.url) {
-			return file.thumbnail_asset.url;
-		}
-
-		throw new Error(`Could not find download URL for file: ${file.file_name}`);
-	}
-
 	async function promptForFile(fileName) {
 		return new Promise((resolve, reject) => {
 			const content = document.createElement('div');
@@ -205,11 +270,7 @@
 				});
 
 				if (file) {
-					resolve({
-						data: file,
-						name: file.name,
-						kind: file.type.startsWith('image/') ? 'image' : 'document'
-					});
+					resolve({ blob: file, name: file.name });
 				} else {
 					resolve(null);
 				}
@@ -219,82 +280,106 @@
 		});
 	}
 
-	async function downloadAndReuploadFiles(messages, loadingModal) {
-		const orgId = getOrgId();
+	async function downloadFilesFromMessages(messages, loadingModal) {
 		const allFiles = messages.flatMap(msg =>
-			(msg.files_v2 || []).map(f => ({
-				uuid: f.file_uuid,
-				url: getFileDownloadUrl(f),
-				kind: f.file_kind,
-				name: f.file_name
-			}))
-		);
+			(msg.files_v2 || []).map(f => new ClaudeFile(f))
+		).filter(f => f.getDownloadUrl());
 
-		if (allFiles.length === 0) return messages;
+		if (allFiles.length === 0) return [];
 
-		// Download files with fallback
 		const downloadedFiles = [];
 		for (let i = 0; i < allFiles.length; i++) {
 			const file = allFiles[i];
 
 			if (loadingModal) {
-				loadingModal.setContent(createLoadingContent(`Downloading file ${i + 1}/${allFiles.length}: ${file.name}`));
+				loadingModal.setContent(createLoadingContent(`Downloading file ${i + 1}/${allFiles.length}: ${file.file_name}`));
 			}
 
 			try {
-				const blob = await downloadFile(file.url);
-				downloadedFiles.push({
-					data: blob,
-					name: file.name,
-					kind: file.kind,
-					originalUuid: file.uuid
-				});
-			} catch (error) {
-				console.log(`Failed to download ${file.name}:`, error);
-				const userFile = await promptForFile(file.name);
-				if (userFile) {
-					downloadedFiles.push({
-						...userFile,
-						originalUuid: file.uuid
-					});
+				const blob = await file.download();
+				if (blob) {
+					downloadedFiles.push(new DownloadedFile({
+						originalUuid: file.file_uuid,
+						blob,
+						fileName: file.file_name
+					}));
 				} else {
-					downloadedFiles.push(null);
+					// No download URL available, prompt user
+					console.log(`No download URL for ${file.file_name}, prompting user`);
+					const userFile = await promptForFile(file.file_name);
+					if (userFile) {
+						downloadedFiles.push(new DownloadedFile({
+							originalUuid: file.file_uuid,
+							blob: userFile.blob,
+							fileName: userFile.name
+						}));
+					}
+				}
+			} catch (error) {
+				console.log(`Failed to download ${file.file_name}:`, error);
+				const userFile = await promptForFile(file.file_name);
+				if (userFile) {
+					downloadedFiles.push(new DownloadedFile({
+						originalUuid: file.file_uuid,
+						blob: userFile.blob,
+						fileName: userFile.name
+					}));
 				}
 			}
 		}
 
-		// Upload files
+		return downloadedFiles;
+	}
+
+	async function uploadAndRemapFiles(messages, downloadedFiles, loadingModal) {
+		if (downloadedFiles.length === 0) return messages;
+
+		const orgId = getOrgId();
+
 		if (loadingModal) {
-			loadingModal.setContent(createLoadingContent(`Uploading ${downloadedFiles.filter(Boolean).length} files...`));
+			loadingModal.setContent(createLoadingContent(`Uploading ${downloadedFiles.length} files...`));
 		}
 
-		const uploadedFiles = await Promise.all(
-			downloadedFiles.map(file =>
-				file ? uploadFile(orgId, file) : Promise.resolve(null)
-			)
+		const uploadResults = await Promise.all(
+			downloadedFiles.map(df => df.upload(orgId))
 		);
 
-		// Build UUID mapping
-		const uuidMap = new Map();
-		allFiles.forEach((oldFile, index) => {
-			if (uploadedFiles[index]) {
-				uuidMap.set(oldFile.uuid, uploadedFiles[index]);
+		// Build mappings: old UUID -> new ClaudeFile or ClaudeAttachment
+		const fileUuidMap = new Map();
+		const attachmentMap = new Map();
+
+		downloadedFiles.forEach((df, index) => {
+			const result = uploadResults[index];
+			if (!result) return;
+
+			if (result instanceof ClaudeFile) {
+				fileUuidMap.set(df.originalUuid, result);
+			} else {
+				attachmentMap.set(df.originalUuid, result);
 			}
 		});
 
-		// Replace files_v2 in messages
+		// Remap messages
 		return messages.map(msg => ({
 			...msg,
 			files_v2: (msg.files_v2 || [])
-				.map(f => uuidMap.get(f.file_uuid))
+				.map(f => fileUuidMap.get(f.file_uuid)?.toApiFormat())
 				.filter(Boolean),
 			files: (msg.files_v2 || [])
-				.map(f => {
-					const newFile = uuidMap.get(f.file_uuid);
-					return newFile ? newFile.file_uuid : null;
-				})
-				.filter(Boolean)
+				.map(f => fileUuidMap.get(f.file_uuid)?.file_uuid)
+				.filter(Boolean),
+			attachments: [
+				...(msg.attachments || []),
+				...(msg.files_v2 || [])
+					.map(f => attachmentMap.get(f.file_uuid)?.toApiFormat())
+					.filter(Boolean)
+			]
 		}));
+	}
+
+	async function downloadAndReuploadFiles(messages, loadingModal) {
+		const downloadedFiles = await downloadFilesFromMessages(messages, loadingModal);
+		return uploadAndRemapFiles(messages, downloadedFiles, loadingModal);
 	}
 	//#endregion
 
@@ -424,6 +509,90 @@
 		return { name: title, chat_messages: messages, warnings };
 	}
 
+	async function parseZipImport(file, loadingModal, includeFiles) {
+		if (loadingModal) {
+			loadingModal.setContent(createLoadingContent('Reading zip file...'));
+		}
+		console.log('Got zip file:', file);
+
+		const base64 = await new Promise((resolve) => {
+			const reader = new FileReader();
+			reader.onloadend = () => resolve(reader.result.split(',')[1]);
+			reader.readAsDataURL(file);
+		});
+
+		const zip = await JSZip.loadAsync(base64, { base64: true });
+
+		// Find and read the txt file
+		const txtFile = zip.file('conversation.txt');
+		if (!txtFile) {
+			throw new Error('Invalid zip: missing conversation.txt');
+		}
+
+		const txtContent = await txtFile.async('string');
+		const parsedData = parseAndValidateText(txtContent);
+
+		// Extract files from zip if requested
+		const downloadedFiles = [];
+		if (includeFiles) {
+			// Build a map of available files in the zip
+			const filesInZip = new Map();
+			zip.folder('files').forEach((relativePath, zipEntry) => {
+				// UUID is 36 chars, positioned before extension (format: {name}-{uuid}.{ext})
+				const lastDot = relativePath.lastIndexOf('.');
+				const baseName = lastDot === -1 ? relativePath : relativePath.substring(0, lastDot);
+
+				// UUID is last 36 characters, preceded by a dash
+				if (baseName.length > 37 && baseName[baseName.length - 37] === '-') {
+					const uuid = baseName.substring(baseName.length - 36);
+					filesInZip.set(uuid, zipEntry);
+				}
+			});
+
+			// Extract files from zip that match files_v2 in messages
+			const allFileRefs = parsedData.chat_messages.flatMap(msg =>
+				(msg.files_v2 || []).map(f => ({
+					uuid: f.file_uuid,
+					name: f.file_name
+				}))
+			);
+
+			for (let i = 0; i < allFileRefs.length; i++) {
+				const fileRef = allFileRefs[i];
+				const zipEntry = filesInZip.get(fileRef.uuid);
+
+				if (loadingModal) {
+					loadingModal.setContent(createLoadingContent(`Extracting file ${i + 1}/${allFileRefs.length}: ${fileRef.name}`));
+				}
+
+				if (zipEntry) {
+					const blob = await zipEntry.async('blob');
+					downloadedFiles.push(new DownloadedFile({
+						originalUuid: fileRef.uuid,
+						blob,
+						fileName: fileRef.name
+					}));
+				} else {
+					// File not in zip - prompt user
+					const userFile = await promptForFile(fileRef.name);
+					if (userFile) {
+						downloadedFiles.push(new DownloadedFile({
+							originalUuid: fileRef.uuid,
+							blob: userFile.blob,
+							fileName: userFile.name
+						}));
+					}
+					// If skipped, file just won't be in downloadedFiles
+				}
+			}
+		}
+
+		return {
+			...parsedData,
+			downloadedFiles
+		};
+	}
+
 	function convertToPhantomMessages(chat_messages) {
 		const phantomMessages = [];
 		let parentId = "00000000-0000-4000-8000-000000000000";
@@ -458,38 +627,6 @@
 		return phantomMessages;
 	}
 
-	function formatMessageForChatlog(message) {
-		const parts = [];
-
-		// Whitelist of content types to include
-		const allowedContentTypes = ['text', 'tool_use', 'tool_result'];
-
-		// Format content
-		for (const item of message.content) {
-			if (!allowedContentTypes.includes(item.type)) {
-				continue; // Skip thinking, etc.
-			}
-
-			if (item.type === 'text') {
-				parts.push(item.text);
-			} else {
-				parts.push(JSON.stringify(item));
-			}
-		}
-
-		// Dump files_v2 as JSON
-		if (message.files_v2 && message.files_v2.length > 0) {
-			parts.push(JSON.stringify(message.files_v2));
-		}
-
-		// Dump attachments as JSON
-		if (message.attachments && message.attachments.length > 0) {
-			parts.push(JSON.stringify(message.attachments));
-		}
-
-		return parts.join('\n\n');
-	}
-
 	async function storePhantomMessagesAndWait(conversationId, messages) {
 		return new Promise((resolve) => {
 			const handler = (event) => {
@@ -522,23 +659,18 @@
 			.map(msg => formatMessageForChatlog(msg))
 			.join('\n\n');
 
-		const chatlogAttachment = {
-			extracted_content: cleanedContent,
-			file_name: "chatlog.txt",
-			file_size: cleanedContent.length,
-			file_type: "text/plain"
-		};
+		const chatlogAttachment = ClaudeAttachment.fromText(cleanedContent, "chatlog.txt");
 
 		// Collect all files from messages (attachments are inlined in chatlog)
-		const allFiles = chat_messages.flatMap(msg => msg.files || []);
+		const allFiles = chat_messages.flatMap(msg => msg.files_v2 || []);
 
 		// Send initial message
 		await conversation.sendMessageAndWaitForResponse(
 			"This conversation is imported from the attached chatlog.txt\nSimply say 'Acknowledged' and wait for user input.",
 			{
 				model: model,
-				attachments: [chatlogAttachment],
-				files: allFiles,
+				attachments: [chatlogAttachment.toApiFormat()],
+				files: allFiles.map(f => f.file_uuid),
 				syncSources: []
 			}
 		);
@@ -671,12 +803,13 @@
 			if (msg.files && Array.isArray(msg.files)) {
 				for (const file of msg.files) {
 					if (file.text) {
-						attachments.push({
+						const attachment = new ClaudeAttachment({
 							extracted_content: file.text,
-							file_name: file.filename || 'unknown',
+							file_name: file.name || 'unknown',
 							file_size: file.bytes || file.text.length,
 							file_type: file.type || 'text/plain'
 						});
+						attachments.push(attachment.toApiFormat());
 					}
 				}
 			}
@@ -744,7 +877,7 @@
 			messageMap.set(msg.messageId, msg);
 		}
 
-		// Last message in array → walk backward to root
+		// Last message in array -> walk backward to root
 		const lastMessage = messages[messages.length - 1];
 		const branch = [];
 		let current = lastMessage;
@@ -786,7 +919,7 @@
 		// Trigger file picker
 		const fileInput = document.createElement('input');
 		fileInput.type = 'file';
-		fileInput.accept = '.txt,.json';
+		fileInput.accept = '.txt,.json,.zip';
 
 		const file = await new Promise(resolve => {
 			fileInput.onchange = e => resolve(e.target.files[0]);
@@ -795,16 +928,22 @@
 
 		if (!file) return;
 
-		// Parse and validate
-		const fileContent = await file.text();
-		let parsedData;
-
 		// Show loading modal
 		const loadingModal = createLoadingModal('Importing...');
 		loadingModal.show();
 
+		// Parse and validate
+		const fileContent = await file.text();
+		let parsedData;
+		let downloadedFiles = null; // For zip imports
+
 		try {
-			if (file.name.endsWith('.json')) {
+			if (file.name.endsWith('.zip')) {
+				// Zip import - includes files
+				parsedData = await parseZipImport(file, loadingModal, includeFiles);
+				downloadedFiles = parsedData.downloadedFiles;
+				delete parsedData.downloadedFiles;
+			} else if (file.name.endsWith('.json')) {
 				const jsonData = JSON.parse(fileContent);
 
 				if (jsonData.chat_messages && jsonData.current_leaf_message_uuid) {
@@ -836,6 +975,7 @@
 				files: [],
 				attachments: []
 			}));
+			downloadedFiles = null;
 		}
 
 		if (!includeToolCalls) {
@@ -847,14 +987,30 @@
 			}));
 		}
 
+		chat_messages = chat_messages.map(msg => ({
+			...msg,
+			content: msg.content.filter(item =>
+				item.type !== 'token_budget'
+			)
+		}));
+
 		// Show warnings modal if needed
 		if (warnings.length > 0) {
 			const proceed = await showWarningsModal(warnings);
 			if (!proceed) return;
 		}
-
+		console.log('Parsed import data:', { name, chat_messages, downloadedFiles });
 		try {
-			chat_messages = await downloadAndReuploadFiles(chat_messages, loadingModal);
+			if (includeFiles) {
+				if (downloadedFiles) {
+					// Zip import - files already extracted, just upload and remap
+					chat_messages = await uploadAndRemapFiles(chat_messages, downloadedFiles, loadingModal);
+				} else {
+					// Non-zip import - download from URLs and reupload
+					chat_messages = await downloadAndReuploadFiles(chat_messages, loadingModal);
+				}
+			}
+
 			await createNewConversation(name, chat_messages, model);
 			// Navigation happens in createNewConversation, loading modal cleaned up automatically
 		} catch (error) {
@@ -874,7 +1030,7 @@
 		// Trigger file picker
 		const fileInput = document.createElement('input');
 		fileInput.type = 'file';
-		fileInput.accept = '.txt,.json';
+		fileInput.accept = '.txt,.json,.zip';
 
 		const file = await new Promise(resolve => {
 			fileInput.onchange = e => resolve(e.target.files[0]);
@@ -883,21 +1039,23 @@
 
 		if (!file) return;
 
-		// Parse and validate
-		const fileContent = await file.text();
-		let parsedData;
-
 		// Show loading modal
 		const loadingModal = createLoadingModal('Replacing phantom messages...');
 		loadingModal.show();
 
+		// Parse and validate
+		let parsedData;
+
 		try {
-			if (file.name.endsWith('.json')) {
+			if (file.name.endsWith('.zip')) {
+				parsedData = await parseZipImport(file, loadingModal, false);
+			} else if (file.name.endsWith('.json')) {
+				const fileContent = await file.text();
 				parsedData = parseLibrechatJson(fileContent);
 			} else {
+				const fileContent = await file.text();
 				parsedData = parseAndValidateText(fileContent);
 			}
-			parsedData.chat_messages = await downloadAndReuploadFiles(parsedData.chat_messages, loadingModal);
 		} catch (error) {
 			showClaudeAlert('Replace Error', error.message || 'Invalid format');
 			loadingModal.destroy();
@@ -907,10 +1065,11 @@
 		// Show warnings modal if needed
 		if (parsedData.warnings.length > 0) {
 			const proceed = await showWarningsModal(parsedData.warnings);
-			if (!proceed) return;
+			if (!proceed) {
+				loadingModal.destroy();
+				return;
+			}
 		}
-
-
 
 		try {
 			// Convert and store phantom messages
@@ -954,6 +1113,7 @@
 			// Format select
 			formatSelect = createClaudeSelect([
 				{ value: 'txt_txt', label: 'Text (.txt)' },
+				{ value: 'zip_zip', label: 'Zip (.zip)' },
 				{ value: 'jsonl_jsonl', label: 'JSONL (.jsonl)' },
 				{ value: 'librechat_json', label: 'Librechat (.json)' },
 				{ value: 'raw_json', label: 'Raw JSON (.json)' }
@@ -1006,9 +1166,13 @@
 					const conversationData = await conversation.getData(exportTree);
 
 					const filename = `Claude_export_${conversationData.name}_${conversationId}.${extension}`;
-					const exportContent = await formatExport(conversationData, format, conversationId);
+					const exportContent = await formatExport(conversationData, format, conversationId, loadingModal);
 
-					const blob = new Blob([exportContent], { type: 'text/plain' });
+					// Handle blob vs string content
+					const blob = exportContent instanceof Blob
+						? exportContent
+						: new Blob([exportContent], { type: 'text/plain' });
+
 					const url = URL.createObjectURL(blob);
 					const link = document.createElement('a');
 					link.href = url;
@@ -1067,7 +1231,7 @@
 		// Import note
 		const note = document.createElement('p');
 		note.className = CLAUDE_CLASSES.TEXT_SM + ' text-text-400';
-		note.textContent = 'Imports txt/JSON (from this modal) and LibreChat JSON.';
+		note.textContent = 'Imports txt/zip/JSON (from this modal) and LibreChat JSON.';
 		content.appendChild(note);
 
 		// Import button handler
