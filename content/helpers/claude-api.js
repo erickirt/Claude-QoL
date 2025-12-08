@@ -66,7 +66,7 @@ class ClaudeConversation {
 		// Log time BEFORE sending request
 		const requestSentTime = new Date().toISOString();
 
-		const response = await fetch(`/api/organizations/${this.orgId}/chat_conversations/${this.conversationId}/completion`, {
+		const response = await fetch(`/api/organizations/$${this.orgId}/chat_conversations/$${this.conversationId}/completion`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify(requestBody)
@@ -106,7 +106,7 @@ class ClaudeConversation {
 
 		while (!assistantMessage && attempts < maxAttempts) {
 			if (attempts > 0) {
-				console.log(`Assistant message not found or too old, waiting 3 seconds and retrying (attempt ${attempts}/${maxAttempts})...`);
+				console.log(`Assistant message not found or too old, waiting 3 seconds and retrying (attempt $${attempts}/$${maxAttempts})...`);
 				await new Promise(r => setTimeout(r, 3000));
 			}
 			messages = await this.getMessages(false, true);
@@ -126,11 +126,44 @@ class ClaudeConversation {
 		return assistantMessage;
 	}
 
+	// Upload file to code execution environment
+	async uploadToCodeExecution(fileOrAttachmentOrBlob, fileName = null) {
+		let blob, name;
+
+		if (fileOrAttachmentOrBlob instanceof ClaudeFile) {
+			blob = await fileOrAttachmentOrBlob.download();
+			name = fileName ?? fileOrAttachmentOrBlob.file_name;
+		} else if (fileOrAttachmentOrBlob instanceof ClaudeAttachment) {
+			blob = new Blob([fileOrAttachmentOrBlob.extracted_content], { type: 'text/plain' });
+			name = fileName ?? fileOrAttachmentOrBlob.file_name;
+		} else if (fileOrAttachmentOrBlob instanceof Blob) {
+			blob = fileOrAttachmentOrBlob;
+			name = fileName ?? 'unnamed';
+		} else {
+			throw new Error('Expected ClaudeFile, ClaudeAttachment, or Blob');
+		}
+
+		const formData = new FormData();
+		formData.append('file', blob, name);
+
+		const response = await fetch(
+			`/api/organizations/$${this.orgId}/conversations/$${this.conversationId}/wiggle/upload-file`,
+			{ method: 'POST', body: formData }
+		);
+
+		if (!response.ok) {
+			throw new Error(`Failed to upload to code execution: ${response.statusText}`);
+		}
+
+		const result = await response.json();
+		return new ClaudeCodeExecutionFile(result, this.orgId, this.conversationId);
+	}
+
 	// Lazy load conversation data
 	async getData(tree = false, forceRefresh = false) {
 		if (!this.conversationData || forceRefresh || (tree && !this.conversationData.chat_messages)) {
 			const response = await fetch(
-				`/api/organizations/${this.orgId}/chat_conversations/${this.conversationId}?tree=${tree}&rendering_mode=messages&render_all_tools=true&skip_uuid_injection=true`
+				`/api/organizations/$${this.orgId}/chat_conversations/$${this.conversationId}?tree=${tree}&rendering_mode=messages&render_all_tools=true&skip_uuid_injection=true`
 			);
 			if (!response.ok) {
 				throw new Error('Failed to get conversation data');
@@ -188,7 +221,7 @@ class ClaudeConversation {
 
 	// Navigate to a specific leaf
 	async setCurrentLeaf(leafId) {
-		const url = `/api/organizations/${this.orgId}/chat_conversations/${this.conversationId}/current_leaf_message_uuid`;
+		const url = `/api/organizations/$${this.orgId}/chat_conversations/$${this.conversationId}/current_leaf_message_uuid`;
 
 		const response = await fetch(url, {
 			method: 'PUT',
@@ -204,7 +237,7 @@ class ClaudeConversation {
 
 	// Delete conversation
 	async delete() {
-		const response = await fetch(`/api/organizations/${this.orgId}/chat_conversations/${this.conversationId}`, {
+		const response = await fetch(`/api/organizations/$${this.orgId}/chat_conversations/$${this.conversationId}`, {
 			method: 'DELETE'
 		});
 
@@ -422,6 +455,59 @@ class ClaudeAttachment {
 	}
 }
 
+class ClaudeCodeExecutionFile {
+	constructor(apiData, orgId, conversationId) {	// orgId and conversationId needed period
+		this.file_uuid = apiData.file_uuid;
+		this.file_name = apiData.file_name;
+		this.sanitized_name = apiData.sanitized_name;
+		this.path = apiData.path; // "/mnt/user-data/uploads/..."
+		this.size_bytes = apiData.size_bytes;
+		this.file_kind = apiData.file_kind;
+		this.created_at = apiData.created_at;
+
+		// Stored for download
+		this.orgId = orgId;
+		this.conversationId = conversationId;
+	}
+
+	async download() {
+		if (!this.orgId || !this.conversationId) {
+			throw new Error('Cannot download: missing orgId or conversationId');
+		}
+
+		const response = await fetch(
+			`/api/organizations/$${this.orgId}/conversations/$${this.conversationId}/wiggle/download-file?path=${encodeURIComponent(this.path)}`
+		);
+
+		if (!response.ok) {
+			throw new Error(`Failed to download file ${this.file_name}`);
+		}
+
+		return await response.blob();
+	}
+
+	async reupload(conversation, fileName = null) {
+		const blob = await this.download();
+		return conversation.uploadToCodeExecution(blob, fileName ?? this.file_name);
+	}
+
+	toApiFormat() {
+		return {
+			file_uuid: this.file_uuid,
+			file_name: this.file_name,
+			sanitized_name: this.sanitized_name,
+			path: this.path,
+			size_bytes: this.size_bytes,
+			file_kind: this.file_kind,
+			created_at: this.created_at
+		};
+	}
+
+	static fromJSON(json, orgId = null, conversationId = null) {
+		return new ClaudeCodeExecutionFile(json, orgId, conversationId);
+	}
+}
+
 class DownloadedFile {
 	constructor({ originalUuid, blob, fileName }) {
 		this.originalUuid = originalUuid;
@@ -431,6 +517,58 @@ class DownloadedFile {
 
 	async upload(orgId) {
 		return ClaudeFile.upload(orgId, this.blob, this.fileName);
+	}
+}
+
+// Unified file parsing - takes API data and returns appropriate class
+function parseFileFromAPI(apiData, conversation = null) {
+	// Code execution file - has path property
+	if (apiData.path) {
+		return ClaudeCodeExecutionFile.fromJSON(apiData, conversation?.orgId, conversation?.conversationId);
+	}
+
+	// Attachment - has extracted_content
+	if (apiData.extracted_content !== undefined) {
+		return ClaudeAttachment.fromJSON(apiData);
+	}
+
+	// Regular file - has file_uuid
+	if (apiData.file_uuid) {
+		return ClaudeFile.fromJSON(apiData);
+	}
+
+	throw new Error('Unknown file format');
+}
+
+// Unified reupload - handles all file types and routes to correct upload method
+async function reuploadFile(file, conversation) {
+	const data = await conversation.getData();
+	const codeExecutionEnabled = data.settings?.enabled_monkeys_in_a_barrel === true;
+
+	// Attachments don't need upload if code execution is off
+	if (file instanceof ClaudeAttachment && !codeExecutionEnabled) {
+		return file; // Just return as-is
+	}
+
+	let blob, fileName;
+
+	if (file instanceof ClaudeFile) {
+		blob = await file.download();
+		fileName = file.file_name;
+	} else if (file instanceof ClaudeAttachment) {
+		blob = new Blob([file.extracted_content], { type: 'text/plain' });
+		fileName = file.file_name;
+	} else if (file instanceof ClaudeCodeExecutionFile) {
+		blob = await file.download();
+		fileName = file.file_name;
+	} else {
+		throw new Error('Unknown file type');
+	}
+
+	if (codeExecutionEnabled) {
+		return conversation.uploadToCodeExecution(blob, fileName);
+	} else {
+		return ClaudeFile.upload(conversation.orgId, blob, fileName);
 	}
 }
 
@@ -446,7 +584,7 @@ class ClaudeProject {
 	// Get project data
 	async getData(forceRefresh = false) {
 		if (!this.projectData || forceRefresh) {
-			const response = await fetch(`/api/organizations/${this.orgId}/projects/${this.projectId}`);
+			const response = await fetch(`/api/organizations/$${this.orgId}/projects/$${this.projectId}`);
 			if (!response.ok) {
 				throw new Error('Failed to fetch project data');
 			}
@@ -457,7 +595,7 @@ class ClaudeProject {
 
 	// Get syncs
 	async getSyncs() {
-		const response = await fetch(`/api/organizations/${this.orgId}/projects/${this.projectId}/syncs`);
+		const response = await fetch(`/api/organizations/$${this.orgId}/projects/$${this.projectId}/syncs`);
 		if (!response.ok) {
 			throw new Error('Failed to fetch project syncs');
 		}
@@ -466,7 +604,7 @@ class ClaudeProject {
 
 	// Get docs (attachments) - always fetch, but cache result
 	async getDocs() {
-		const response = await fetch(`/api/organizations/${this.orgId}/projects/${this.projectId}/docs`);
+		const response = await fetch(`/api/organizations/$${this.orgId}/projects/$${this.projectId}/docs`);
 		if (!response.ok) {
 			throw new Error('Failed to fetch project docs');
 		}
@@ -476,7 +614,7 @@ class ClaudeProject {
 
 	// Get files - always fetch, but cache result
 	async getFiles() {
-		const response = await fetch(`/api/organizations/${this.orgId}/projects/${this.projectId}/files`);
+		const response = await fetch(`/api/organizations/$${this.orgId}/projects/$${this.projectId}/files`);
 		if (!response.ok) {
 			throw new Error('Failed to fetch project files');
 		}
@@ -648,12 +786,12 @@ class ClaudeProject {
 		const lastDot = filename.lastIndexOf('.');
 		if (lastDot === -1) {
 			// No extension
-			return `${filename}-${uuid}`;
+			return `$${filename}-$${uuid}`;
 		}
 
 		const name = filename.substring(0, lastDot);
 		const ext = filename.substring(lastDot);
-		return `${name}-${uuid}${ext}`;
+		return `$${name}-$${uuid}${ext}`;
 	}
 }
 
@@ -678,50 +816,6 @@ async function updateAccountSettings(settings) {
 	}
 	return await response.json();
 }
-
-// File operations (legacy - consider migrating to ClaudeFile.upload)
-async function uploadFile(orgId, file) {
-	// Blob types need document conversion, not file upload
-	if (file.kind === 'blob') {
-		const attachment = await convertDocument(orgId, file);
-		return { type: 'attachment', data: attachment };
-	}
-	console.log(`Uploading file: ${JSON.stringify(file)}`);
-	const ext = file.name.toLowerCase().split('.').pop();
-	const mimeType = MIME_TYPES[ext] || 'application/octet-stream';
-	const typedBlob = new Blob([file.data], { type: mimeType });
-
-	const formData = new FormData();
-	formData.append('file', typedBlob, file.name);
-
-	const response = await fetch(`/api/${orgId}/upload`, {
-		method: 'POST',
-		body: formData
-	});
-
-	if (!response.ok) {
-		throw new Error(`Failed to upload file ${file.name}`);
-	}
-
-	return { type: 'file', data: await response.json() };
-}
-
-async function convertDocument(orgId, file) {
-	const formData = new FormData();
-	formData.append('file', file.data, file.name);
-
-	const response = await fetch(`/api/${orgId}/convert_document`, {
-		method: 'POST',
-		body: formData
-	});
-
-	if (!response.ok) {
-		throw new Error(`Failed to convert document ${file.name}`);
-	}
-
-	return await response.json();
-}
-
 
 async function downloadFile(url) {
 	const response = await fetch(url);
