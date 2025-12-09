@@ -39,34 +39,46 @@ class ClaudeConversation {
 	}
 
 	// Send a message and wait for response
-	async sendMessageAndWaitForResponse(prompt, options = {}) {
-		const {
-			model = null,
-			parentMessageUuid = '00000000-0000-4000-8000-000000000000',
-			attachments = [],
-			files = [],
-			syncSources = [],
-			personalizedStyles = null
-		} = options;
+	async sendMessageAndWaitForResponse(promptOrMessage, options = {}) {
+		let requestBody;
 
-		const requestBody = {
-			prompt,
-			parent_message_uuid: parentMessageUuid,
-			attachments,
-			files,
-			sync_sources: syncSources,
-			personalized_styles: personalizedStyles,
-			rendering_mode: "messages"
-		};
+		if (promptOrMessage instanceof ClaudeMessage) {
+			// Use toCompletionJSON() which produces correct format
+			requestBody = promptOrMessage.toCompletionJSON();
+			// Allow options to override model if provided
+			if (options.model) {
+				requestBody.model = options.model;
+			}
+		} else {
+			// Existing string prompt behavior
+			const {
+				model = null,
+				parentMessageUuid = '00000000-0000-4000-8000-000000000000',
+				attachments = [],
+				files = [],
+				syncSources = [],
+				personalizedStyles = null
+			} = options;
 
-		if (model !== null) {
-			requestBody.model = model;
+			requestBody = {
+				prompt: promptOrMessage,
+				parent_message_uuid: parentMessageUuid,
+				attachments,
+				files,
+				sync_sources: syncSources,
+				personalized_styles: personalizedStyles,
+				rendering_mode: "messages"
+			};
+
+			if (model !== null) {
+				requestBody.model = model;
+			}
 		}
 
 		// Log time BEFORE sending request
 		const requestSentTime = new Date().toISOString();
 
-		const response = await fetch(`/api/organizations/$${this.orgId}/chat_conversations/$${this.conversationId}/completion`, {
+		const response = await fetch(`/api/organizations/${this.orgId}/chat_conversations/${this.conversationId}/completion`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify(requestBody)
@@ -99,6 +111,7 @@ class ClaudeConversation {
 		}
 
 		// Find assistant message created AFTER our request
+		// getMessages() now returns ClaudeMessage[], so use .createdAt property
 		let assistantMessage;
 		let attempts = 0;
 		let messages;
@@ -106,13 +119,13 @@ class ClaudeConversation {
 
 		while (!assistantMessage && attempts < maxAttempts) {
 			if (attempts > 0) {
-				console.log(`Assistant message not found or too old, waiting 3 seconds and retrying (attempt $${attempts}/$${maxAttempts})...`);
+				console.log(`Assistant message not found or too old, waiting 3 seconds and retrying (attempt ${attempts}/${maxAttempts})...`);
 				await new Promise(r => setTimeout(r, 3000));
 			}
 			messages = await this.getMessages(false, true);
 			assistantMessage = messages.find(msg =>
 				msg.sender === 'assistant' &&
-				msg.created_at > requestSentTime
+				msg.createdAt > requestSentTime
 			);
 			attempts++;
 		}
@@ -176,7 +189,9 @@ class ClaudeConversation {
 	// Get messages (now uses getData)
 	async getMessages(tree = false, forceRefresh = false) {
 		const data = await this.getData(tree, forceRefresh);
-		return data.chat_messages || [];
+		return (data.chat_messages || []).map(msg =>
+			ClaudeMessage.fromHistoryJSON(this, msg)
+		);
 	}
 
 	// Find longest leaf from a message ID
@@ -246,9 +261,10 @@ class ClaudeConversation {
 		}
 	}
 
-	// Extract text from message content
+	// Extract text from message content (works with both raw JSON and ClaudeMessage)
 	static extractMessageText(message) {
-		if (!message.content) return '';
+		// ClaudeMessage has .content array just like raw JSON, so same logic works
+		if (!message.content || message.content.length === 0) return '';
 
 		const textPieces = [];
 
@@ -569,6 +585,224 @@ async function reuploadFile(file, conversation) {
 		return conversation.uploadToCodeExecution(blob, fileName);
 	} else {
 		return ClaudeFile.upload(conversation.orgId, blob, fileName);
+	}
+}
+
+class ClaudeMessage {
+	constructor(conversation, historyJson = null) {
+		this.conversation = conversation;
+
+		// Core
+		this.uuid = null;
+		this.parent_message_uuid = '00000000-0000-4000-8000-000000000000';
+		this.sender = 'human';
+		this.index = 0;
+
+		// Content (text is derived from content, not stored separately)
+		this.content = [];
+
+		// Timestamps
+		this.created_at = null;
+		this.updated_at = null;
+
+		// Files
+		this._files = [];
+
+		// Other
+		this.sync_sources = [];
+		this.truncated = false;
+
+		// Completion-specific (defaults)
+		this.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+		this.locale = navigator.language || 'en-US';
+		this.model = null;
+		this.tools = [];
+		this.personalized_styles = [];
+		this.rendering_mode = 'messages';
+
+		if (historyJson) {
+			this._parseFromHistory(historyJson);
+		}
+	}
+
+	get files() { return this._files; }
+
+	_parseFromHistory(json) {
+		this.uuid = json.uuid;
+		this.parent_message_uuid = json.parent_message_uuid;
+		this.sender = json.sender;
+		this.index = json.index;
+		this.content = json.content || [];
+		this.created_at = json.created_at;
+		this.updated_at = json.updated_at;
+		this.truncated = json.truncated || false;
+		this.sync_sources = json.sync_sources || [];
+
+		// Parse files_v2 into file instances
+		for (const f of json.files_v2 || []) {
+			this._files.push(parseFileFromAPI(f, this.conversation));
+		}
+
+		// Parse attachments
+		for (const a of json.attachments || []) {
+			this._files.push(parseFileFromAPI(a, this.conversation));
+		}
+	}
+
+	// Helper to get/set text content for human messages
+	get text() {
+		const textBlocks = this.content.filter(c => c.type === 'text');
+		return textBlocks.map(b => b.text).join('\n\n');
+	}
+
+	set text(value) {
+		// Replace content with single text block
+		this.content = [{ type: 'text', text: value }];
+	}
+
+	async addFile(input, filename = null) {
+		const data = await this.conversation.getData();
+		const codeExecutionEnabled = data.settings?.enabled_monkeys_in_a_barrel === true;
+
+		// Handle string input (text content)
+		if (typeof input === 'string') {
+			const name = filename || 'text.txt';
+			if (codeExecutionEnabled) {
+				const blob = new Blob([input], { type: 'text/plain' });
+				const result = await this.conversation.uploadToCodeExecution(blob, name);
+				this._files.push(result);
+				return result;
+			} else {
+				const result = ClaudeAttachment.fromText(input, name);
+				this._files.push(result);
+				return result;
+			}
+		}
+
+		// Handle Blob input (new file upload)
+		if (input instanceof Blob) {
+			const name = filename || 'file';
+			if (codeExecutionEnabled) {
+				const result = await this.conversation.uploadToCodeExecution(input, name);
+				this._files.push(result);
+				return result;
+			} else {
+				const result = await ClaudeFile.upload(this.conversation.orgId, input, name);
+				this._files.push(result);
+				return result;
+			}
+		}
+
+		// Handle existing file objects (re-upload via reuploadFile)
+		const result = await reuploadFile(input, this.conversation);
+		this._files.push(result);
+		return result;
+	}
+
+	removeFile(uuid) {
+		this._files = this._files.filter(f =>
+			(f.file_uuid || f.file_name) !== uuid
+		);
+	}
+
+	clearFiles() {
+		this._files = [];
+	}
+
+	_getFilesJSON() {
+		const files_v2 = [];
+		const files = [];
+		const attachments = [];
+
+		for (const f of this._files) {
+			if (f instanceof ClaudeAttachment) {
+				attachments.push(f.toApiFormat());
+			} else {
+				files_v2.push(f.toApiFormat());
+				files.push(f.file_uuid);
+			}
+		}
+
+		return { files_v2, files, attachments };
+	}
+
+	toHistoryJSON() {
+		const { files_v2, files, attachments } = this._getFilesJSON();
+
+		return {
+			uuid: this.uuid,
+			text: this.text,  // Derived from content via getter
+			content: this.content,
+			sender: this.sender,
+			index: this.index,
+			created_at: this.created_at,
+			updated_at: this.updated_at,
+			truncated: this.truncated,
+			attachments,
+			files,
+			files_v2,
+			sync_sources: this.sync_sources,
+			parent_message_uuid: this.parent_message_uuid
+		};
+	}
+
+	toCompletionJSON() {
+		// Validate: can only send human messages
+		if (this.sender !== 'human') {
+			throw new Error('Cannot send non-human message as completion');
+		}
+
+		// Extract prompt from content
+		const textBlocks = this.content.filter(c => c.type === 'text');
+		if (textBlocks.length === 0) {
+			throw new Error('Message has no text content');
+		}
+		if (textBlocks.length > 1) {
+			throw new Error('Cannot send message with multiple text blocks as completion');
+		}
+
+		const { files, attachments } = this._getFilesJSON();
+
+		return {
+			prompt: textBlocks[0].text,
+			parent_message_uuid: this.parent_message_uuid,
+			timezone: this.timezone,
+			personalized_styles: this.personalized_styles,
+			locale: this.locale,
+			model: this.model,
+			tools: this.tools,
+			attachments,
+			files,
+			sync_sources: this.sync_sources,
+			rendering_mode: this.rendering_mode
+		};
+	}
+
+	//Does NOT do any filtering, remove unwanted content before calling this
+	toChatlogString() {
+		const parts = [];
+		const allowedContentTypes = ['text', 'tool_use', 'tool_result'];
+
+		// Format content
+		for (const item of this.content) {
+			if (!allowedContentTypes.includes(item.type)) continue;
+			if (item.type === 'text') {
+				parts.push(item.text);
+			} else {
+				parts.push(JSON.stringify(item));
+			}
+		}
+
+		// Dump files as JSON
+		const { files_v2, attachments } = this._getFilesJSON();
+		if (files_v2.length > 0) parts.push(JSON.stringify(files_v2));
+		if (attachments.length > 0) parts.push(JSON.stringify(attachments));
+
+		return parts.join('\n\n');
+	}
+
+	static fromHistoryJSON(conversation, json) {
+		return new ClaudeMessage(conversation, json);
 	}
 }
 
