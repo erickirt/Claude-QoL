@@ -1154,37 +1154,3 @@ const CLAUDE_MODELS = [
 
 const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-5-20250929';
 const FAST_MODEL = 'claude-haiku-4-5-20251001';
-
-// Formats a message for inclusion in chatlog.txt attachment
-// Does NOT do filtering - filter out unwanted content (tool calls, files) beforehand
-function formatMessageForChatlog(message) {
-	const parts = [];
-
-	// Whitelist of content types to include
-	const allowedContentTypes = ['text', 'tool_use', 'tool_result'];
-
-	// Format content
-	for (const item of message.content) {
-		if (!allowedContentTypes.includes(item.type)) {
-			continue; // Skip thinking, etc.
-		}
-
-		if (item.type === 'text') {
-			parts.push(item.text);
-		} else {
-			parts.push(JSON.stringify(item));
-		}
-	}
-
-	// Dump files_v2 as JSON
-	if (message.files_v2 && message.files_v2.length > 0) {
-		parts.push(JSON.stringify(message.files_v2));
-	}
-
-	// Dump attachments as JSON
-	if (message.attachments && message.attachments.length > 0) {
-		parts.push(JSON.stringify(message.attachments));
-	}
-
-	return parts.join('\n\n');
-}
