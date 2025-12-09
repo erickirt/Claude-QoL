@@ -75,9 +75,7 @@
 
 				try {
 					const conversation = new ClaudeConversation(orgId, conv.uuid);
-					await conversation.getData(true);
-
-					const messages = conversation.conversationData.chat_messages || [];
+					const messages = await conversation.getMessages(true);
 					await searchDB.setMessages(conv.uuid, messages);
 
 					completed++;

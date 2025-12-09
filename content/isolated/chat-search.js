@@ -5,14 +5,14 @@
 	const { getRelativeTime, simplifyText, fuzzyMatch } = window.ClaudeSearchShared;
 
 	// ======== SEARCH FUNCTION ========
-	function searchMessages(query, conversation) {
+	async function searchMessages(query, conversation) {
 		if (!query || query.trim() === '') {
 			return [];
 		}
 
 		const lowerQuery = query.toLowerCase();
 		const results = [];
-		const messages = conversation.conversationData.chat_messages || [];
+		const messages = await conversation.getMessages(true);
 
 		// Build message map for easy lookup
 		const messageMap = new Map();
@@ -292,7 +292,8 @@
 			let latestMessage = null;
 			let latestTimestamp = 0;
 
-			for (const msg of conversation.conversationData.chat_messages) {
+			const messages = await conversation.getMessages(true);
+			for (const msg of messages) {
 				const timestamp = new Date(msg.created_at).getTime();
 				if (timestamp > latestTimestamp) {
 					latestTimestamp = timestamp;
@@ -343,7 +344,7 @@
 		contentDiv.appendChild(resultsContainer);
 
 		// Search function
-		const performSearch = () => {
+		const performSearch = async () => {
 			const query = searchInput.value.trim();
 			resultsContainer.innerHTML = '';
 
@@ -351,7 +352,7 @@
 				return;
 			}
 
-			const results = searchMessages(query, conversation);
+			const results = await searchMessages(query, conversation);
 
 			if (results.length === 0) {
 				const noResults = document.createElement('div');

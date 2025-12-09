@@ -116,13 +116,13 @@
 	}
 
 	//#region TREE VIEW MODAL
-	function buildBookmarkTree(conversationId, conversation) {
+	async function buildBookmarkTree(conversationId, conversation) {
 		const ROOT_UUID = "00000000-0000-4000-8000-000000000000";
-		const conversationData = conversation.conversationData;
 
 		// Build message map
+		const messages = await conversation.getMessages(true);
 		const messageMap = new Map();
-		for (const msg of conversationData.chat_messages) {
+		for (const msg of messages) {
 			messageMap.set(msg.uuid, msg);
 		}
 
@@ -248,7 +248,7 @@
 	}
 
 	async function showBookmarkTreeModal(conversationId, conversation) {
-		const { tree, bookmarks, bookmarkDepths } = buildBookmarkTree(conversationId, conversation);
+		const { tree, bookmarks, bookmarkDepths } = await buildBookmarkTree(conversationId, conversation);
 
 		// Check if there are any bookmarks
 		if (Object.keys(bookmarks).length === 0) {
@@ -339,7 +339,8 @@
 			let latestMessage = null;
 			let latestTimestamp = 0;
 
-			for (const msg of conversationData.chat_messages) {
+			const messages = await conversation.getMessages(true);
+			for (const msg of messages) {
 				const timestamp = new Date(msg.created_at).getTime();
 				if (timestamp > latestTimestamp) {
 					latestTimestamp = timestamp;
