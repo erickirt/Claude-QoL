@@ -125,7 +125,7 @@ class ClaudeConversation {
 			messages = await this.getMessages(false, true);
 			assistantMessage = messages.find(msg =>
 				msg.sender === 'assistant' &&
-				msg.createdAt > requestSentTime
+				msg.created_at > requestSentTime
 			);
 			attempts++;
 		}
@@ -160,7 +160,7 @@ class ClaudeConversation {
 		formData.append('file', blob, name);
 
 		const response = await fetch(
-			`/api/organizations/$${this.orgId}/conversations/$${this.conversationId}/wiggle/upload-file`,
+			`/api/organizations/${this.orgId}/conversations/${this.conversationId}/wiggle/upload-file`,
 			{ method: 'POST', body: formData }
 		);
 
@@ -176,7 +176,7 @@ class ClaudeConversation {
 	async getData(tree = false, forceRefresh = false) {
 		if (!this.conversationData || forceRefresh || (tree && !this.conversationData.chat_messages)) {
 			const response = await fetch(
-				`/api/organizations/$${this.orgId}/chat_conversations/$${this.conversationId}?tree=${tree}&rendering_mode=messages&render_all_tools=true&skip_uuid_injection=true`
+				`/api/organizations/${this.orgId}/chat_conversations/${this.conversationId}?tree=${tree}&rendering_mode=messages&render_all_tools=true&skip_uuid_injection=true`
 			);
 			if (!response.ok) {
 				throw new Error('Failed to get conversation data');
@@ -236,7 +236,7 @@ class ClaudeConversation {
 
 	// Navigate to a specific leaf
 	async setCurrentLeaf(leafId) {
-		const url = `/api/organizations/$${this.orgId}/chat_conversations/$${this.conversationId}/current_leaf_message_uuid`;
+		const url = `/api/organizations/${this.orgId}/chat_conversations/${this.conversationId}/current_leaf_message_uuid`;
 
 		const response = await fetch(url, {
 			method: 'PUT',
@@ -252,7 +252,7 @@ class ClaudeConversation {
 
 	// Delete conversation
 	async delete() {
-		const response = await fetch(`/api/organizations/$${this.orgId}/chat_conversations/$${this.conversationId}`, {
+		const response = await fetch(`/api/organizations/${this.orgId}/chat_conversations/${this.conversationId}`, {
 			method: 'DELETE'
 		});
 
@@ -484,16 +484,26 @@ class ClaudeCodeExecutionFile {
 		// Stored for download
 		this.orgId = orgId;
 		this.conversationId = conversationId;
+
+		// For inline attachment mode (text files with code exec ON)
+		this.extracted_content = apiData.extracted_content || null;
+		this.force_attachment_mode = false;
+	}
+
+	getDownloadUrl() {
+		if (!this.orgId || !this.conversationId || !this.path) {
+			return null;
+		}
+		return `/api/organizations/${this.orgId}/conversations/${this.conversationId}/wiggle/download-file?path=${encodeURIComponent(this.path)}`;
 	}
 
 	async download() {
-		if (!this.orgId || !this.conversationId) {
-			throw new Error('Cannot download: missing orgId or conversationId');
+		const url = this.getDownloadUrl();
+		if (!url) {
+			throw new Error('Cannot download: missing orgId, conversationId, or path');
 		}
 
-		const response = await fetch(
-			`/api/organizations/$${this.orgId}/conversations/$${this.conversationId}/wiggle/download-file?path=${encodeURIComponent(this.path)}`
-		);
+		const response = await fetch(url);
 
 		if (!response.ok) {
 			throw new Error(`Failed to download file ${this.file_name}`);
@@ -556,38 +566,6 @@ function parseFileFromAPI(apiData, conversation = null) {
 	throw new Error('Unknown file format');
 }
 
-// Unified reupload - handles all file types and routes to correct upload method
-async function reuploadFile(file, conversation) {
-	const data = await conversation.getData();
-	const codeExecutionEnabled = data.settings?.enabled_monkeys_in_a_barrel === true;
-
-	// Attachments don't need upload if code execution is off
-	if (file instanceof ClaudeAttachment && !codeExecutionEnabled) {
-		return file; // Just return as-is
-	}
-
-	let blob, fileName;
-
-	if (file instanceof ClaudeFile) {
-		blob = await file.download();
-		fileName = file.file_name;
-	} else if (file instanceof ClaudeAttachment) {
-		blob = new Blob([file.extracted_content], { type: 'text/plain' });
-		fileName = file.file_name;
-	} else if (file instanceof ClaudeCodeExecutionFile) {
-		blob = await file.download();
-		fileName = file.file_name;
-	} else {
-		throw new Error('Unknown file type');
-	}
-
-	if (codeExecutionEnabled) {
-		return conversation.uploadToCodeExecution(blob, fileName);
-	} else {
-		return ClaudeFile.upload(conversation.orgId, blob, fileName);
-	}
-}
-
 class ClaudeMessage {
 	constructor(conversation, historyJson = null) {
 		this.conversation = conversation;
@@ -640,12 +618,12 @@ class ClaudeMessage {
 
 		// Parse files_v2 into file instances
 		for (const f of json.files_v2 || []) {
-			this._files.push(parseFileFromAPI(f, this.conversation));
+			this.attachFile(parseFileFromAPI(f, this.conversation));
 		}
 
 		// Parse attachments
 		for (const a of json.attachments || []) {
-			this._files.push(parseFileFromAPI(a, this.conversation));
+			this.attachFile(parseFileFromAPI(a, this.conversation));
 		}
 	}
 
@@ -660,7 +638,7 @@ class ClaudeMessage {
 		this.content = [{ type: 'text', text: value }];
 	}
 
-	async addFile(input, filename = null) {
+	async addFile(input, filename = null, forceAttachmentMode = false) {
 		const data = await this.conversation.getData();
 		const codeExecutionEnabled = data.settings?.enabled_monkeys_in_a_barrel === true;
 
@@ -670,6 +648,8 @@ class ClaudeMessage {
 			if (codeExecutionEnabled) {
 				const blob = new Blob([input], { type: 'text/plain' });
 				const result = await this.conversation.uploadToCodeExecution(blob, name);
+				result.extracted_content = input;  // Store text content for inline attachment mode
+				result.force_attachment_mode = forceAttachmentMode;
 				this._files.push(result);
 				return result;
 			} else {
@@ -684,6 +664,7 @@ class ClaudeMessage {
 			const name = filename || 'file';
 			if (codeExecutionEnabled) {
 				const result = await this.conversation.uploadToCodeExecution(input, name);
+				result.force_attachment_mode = forceAttachmentMode;
 				this._files.push(result);
 				return result;
 			} else {
@@ -693,10 +674,48 @@ class ClaudeMessage {
 			}
 		}
 
-		// Handle existing file objects (re-upload via reuploadFile)
-		const result = await reuploadFile(input, this.conversation);
-		this._files.push(result);
-		return result;
+		// Handle existing file objects - re-upload to this conversation
+		// (Files cannot be shared across conversations, they must be re-uploaded)
+		if (input instanceof ClaudeFile ||
+			input instanceof ClaudeCodeExecutionFile ||
+			input instanceof ClaudeAttachment) {
+
+			// Attachments don't need upload if code execution is off
+			if (input instanceof ClaudeAttachment && !codeExecutionEnabled) {
+				this._files.push(input);
+				return input;
+			}
+
+			// Download and re-upload
+			let blob, fileName, extractedContent = null;
+			if (input instanceof ClaudeFile) {
+				blob = await input.download();
+				fileName = input.file_name;
+			} else if (input instanceof ClaudeAttachment) {
+				blob = new Blob([input.extracted_content], { type: 'text/plain' });
+				fileName = input.file_name;
+				extractedContent = input.extracted_content;  // Preserve text content
+			} else if (input instanceof ClaudeCodeExecutionFile) {
+				blob = await input.download();
+				fileName = input.file_name;
+				extractedContent = input.extracted_content;  // Preserve text content
+			}
+
+			let result;
+			if (codeExecutionEnabled) {
+				result = await this.conversation.uploadToCodeExecution(blob, fileName);
+				if (extractedContent !== null) {
+					result.extracted_content = extractedContent;  // Transfer to new file
+				}
+				result.force_attachment_mode = forceAttachmentMode;
+			} else {
+				result = await ClaudeFile.upload(this.conversation.orgId, blob, fileName);
+			}
+			this._files.push(result);
+			return result;
+		}
+
+		throw new Error('addFile: unsupported input type');
 	}
 
 	removeFile(uuid) {
@@ -709,7 +728,46 @@ class ClaudeMessage {
 		this._files = [];
 	}
 
+	/**
+	 * Attach an existing file object WITHOUT uploading.
+	 *
+	 * IMPORTANT: The file MUST already exist in this conversation.
+	 * Use cases:
+	 * - Phantom messages (visual display only, real files attached to latest message)
+	 * - Editing messages (files already uploaded to this conversation)
+	 * - Internal parsing (reconstructing from API/JSON)
+	 *
+	 * For files from OTHER conversations, use addFile() which will re-upload them.
+	 * Files cannot be shared across conversations - they must be re-uploaded.
+	 *
+	 * For bulk replacement: use clearFiles() then loop with attachFile()
+	 *
+	 * @param {ClaudeFile|ClaudeCodeExecutionFile|ClaudeAttachment} fileObj - The file to attach
+	 * @param {boolean|null} forceAttachmentMode - For ClaudeCodeExecutionFile only: override
+	 *        the length-based decision for inline attachment mode. Set to true to force inline,
+	 *        false to force reference-only, or null to use default length-based behavior.
+	 */
+	attachFile(fileObj, forceAttachmentMode = null) {
+		if (!(fileObj instanceof ClaudeFile ||
+			fileObj instanceof ClaudeCodeExecutionFile ||
+			fileObj instanceof ClaudeAttachment)) {
+			throw new Error('attachFile requires a file instance (ClaudeFile, ClaudeCodeExecutionFile, or ClaudeAttachment)');
+		}
+		this._files.push(fileObj);
+		if (forceAttachmentMode !== null && fileObj instanceof ClaudeCodeExecutionFile) {
+			fileObj.force_attachment_mode = forceAttachmentMode;
+		}
+		return fileObj;
+	}
+
+	removeToolCalls() {
+		this.content = this.content.filter(item =>
+			item.type !== 'tool_use' && item.type !== 'tool_result'
+		);
+	}
+
 	_getFilesJSON() {
+		const ATTACHMENT_CHAR_LIMIT = 15000;
 		const files_v2 = [];
 		const files = [];
 		const attachments = [];
@@ -717,7 +775,29 @@ class ClaudeMessage {
 		for (const f of this._files) {
 			if (f instanceof ClaudeAttachment) {
 				attachments.push(f.toApiFormat());
+			} else if (f instanceof ClaudeCodeExecutionFile) {
+				// Check if this should be inlined as attachment
+				let shouldInline = false;
+				if (f.extracted_content !== null) {
+					shouldInline = f.force_attachment_mode ||
+						f.extracted_content.length <= ATTACHMENT_CHAR_LIMIT;
+				}
+
+				if (shouldInline) {
+					// Short text files: inline as attachment ONLY (not in files)
+					attachments.push({
+						extracted_content: f.extracted_content,
+						file_name: f.file_name,
+						file_size: f.extracted_content.length,
+						file_type: 'text/plain'
+					});
+				} else {
+					// Large files or non-text: include in files array
+					files_v2.push(f.toApiFormat());
+					files.push(f.file_uuid);
+				}
 			} else {
+				// ClaudeFile
 				files_v2.push(f.toApiFormat());
 				files.push(f.file_uuid);
 			}
@@ -818,7 +898,7 @@ class ClaudeProject {
 	// Get project data
 	async getData(forceRefresh = false) {
 		if (!this.projectData || forceRefresh) {
-			const response = await fetch(`/api/organizations/$${this.orgId}/projects/$${this.projectId}`);
+			const response = await fetch(`/api/organizations/${this.orgId}/projects/${this.projectId}`);
 			if (!response.ok) {
 				throw new Error('Failed to fetch project data');
 			}
@@ -829,7 +909,7 @@ class ClaudeProject {
 
 	// Get syncs
 	async getSyncs() {
-		const response = await fetch(`/api/organizations/$${this.orgId}/projects/$${this.projectId}/syncs`);
+		const response = await fetch(`/api/organizations/${this.orgId}/projects/${this.projectId}/syncs`);
 		if (!response.ok) {
 			throw new Error('Failed to fetch project syncs');
 		}
@@ -838,7 +918,7 @@ class ClaudeProject {
 
 	// Get docs (attachments) - always fetch, but cache result
 	async getDocs() {
-		const response = await fetch(`/api/organizations/$${this.orgId}/projects/$${this.projectId}/docs`);
+		const response = await fetch(`/api/organizations/${this.orgId}/projects/${this.projectId}/docs`);
 		if (!response.ok) {
 			throw new Error('Failed to fetch project docs');
 		}
@@ -848,7 +928,7 @@ class ClaudeProject {
 
 	// Get files - always fetch, but cache result
 	async getFiles() {
-		const response = await fetch(`/api/organizations/$${this.orgId}/projects/$${this.projectId}/files`);
+		const response = await fetch(`/api/organizations/${this.orgId}/projects/${this.projectId}/files`);
 		if (!response.ok) {
 			throw new Error('Failed to fetch project files');
 		}
@@ -1020,12 +1100,12 @@ class ClaudeProject {
 		const lastDot = filename.lastIndexOf('.');
 		if (lastDot === -1) {
 			// No extension
-			return `$${filename}-$${uuid}`;
+			return `${filename}-${uuid}`;
 		}
 
 		const name = filename.substring(0, lastDot);
 		const ext = filename.substring(lastDot);
-		return `$${name}-$${uuid}${ext}`;
+		return `${name}-${uuid}${ext}`;
 	}
 }
 
@@ -1154,3 +1234,347 @@ const CLAUDE_MODELS = [
 
 const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-5-20250929';
 const FAST_MODEL = 'claude-haiku-4-5-20251001';
+
+// Test function for verifying ClaudeMessage and file classes work correctly
+// Usage: window.testClaudeAPI() or window.testClaudeAPI({ sendMessage: true })
+window.testClaudeAPI = async function (options = {}) {
+	const { sendMessage = false } = options;
+	const results = { passed: [], failed: [], warnings: [] };
+
+	function pass(test) {
+		console.log(`✅ ${test}`);
+		results.passed.push(test);
+	}
+
+	function fail(test, error) {
+		console.error(`❌ ${test}:`, error);
+		results.failed.push({ test, error: error.message || error });
+	}
+
+	function warn(msg) {
+		console.warn(`⚠️ ${msg}`);
+		results.warnings.push(msg);
+	}
+
+	console.log('=== ClaudeAPI Test Suite ===\n');
+
+	// Get current conversation
+	const conversationId = getConversationId();
+	if (!conversationId) {
+		fail('Get conversation ID', 'Not on a conversation page');
+		return results;
+	}
+	pass('Get conversation ID');
+
+	const orgId = getOrgId();
+	pass('Get org ID');
+
+	const conversation = new ClaudeConversation(orgId, conversationId);
+
+	// Test getData
+	let convData;
+	try {
+		convData = await conversation.getData();
+		pass('ClaudeConversation.getData()');
+		console.log(`  Conversation: "${convData.name}"`);
+		console.log(`  Code execution: ${convData.settings?.enabled_monkeys_in_a_barrel ? 'ON' : 'OFF'}`);
+	} catch (e) {
+		fail('ClaudeConversation.getData()', e);
+		return results;
+	}
+
+	// Test getMessages
+	let messages;
+	try {
+		messages = await conversation.getMessages();
+		pass(`ClaudeConversation.getMessages() - ${messages.length} messages`);
+
+		// Verify they're ClaudeMessage instances
+		if (messages.every(m => m instanceof ClaudeMessage)) {
+			pass('All messages are ClaudeMessage instances');
+		} else {
+			fail('All messages are ClaudeMessage instances', 'Some messages are not ClaudeMessage');
+		}
+	} catch (e) {
+		fail('ClaudeConversation.getMessages()', e);
+		return results;
+	}
+
+	// Test ClaudeMessage properties on first user message
+	const userMsg = messages.find(m => m.sender === 'human');
+	if (userMsg) {
+		console.log('\n--- Testing ClaudeMessage on first user message ---');
+
+		// Test text getter
+		try {
+			const text = userMsg.text;
+			pass(`text getter: "${text.slice(0, 50)}${text.length > 50 ? '...' : ''}"`);
+		} catch (e) {
+			fail('text getter', e);
+		}
+
+		// Test files getter
+		try {
+			const files = userMsg.files;
+			pass(`files getter: ${files.length} files`);
+			for (const f of files) {
+				const type = f instanceof ClaudeFile ? 'ClaudeFile' :
+					f instanceof ClaudeCodeExecutionFile ? 'ClaudeCodeExecutionFile' :
+						f instanceof ClaudeAttachment ? 'ClaudeAttachment' : 'Unknown';
+				console.log(`    - ${f.file_name} (${type})`);
+			}
+		} catch (e) {
+			fail('files getter', e);
+		}
+
+		// Test toHistoryJSON
+		try {
+			const json = userMsg.toHistoryJSON();
+			if (json.uuid && json.sender && json.content) {
+				pass('toHistoryJSON() produces valid structure');
+			} else {
+				fail('toHistoryJSON()', 'Missing required fields');
+			}
+		} catch (e) {
+			fail('toHistoryJSON()', e);
+		}
+
+		// Test fromHistoryJSON roundtrip
+		try {
+			const json = userMsg.toHistoryJSON();
+			const restored = ClaudeMessage.fromHistoryJSON(conversation, json);
+			if (restored.uuid === userMsg.uuid &&
+				restored.text === userMsg.text &&
+				restored.files.length === userMsg.files.length) {
+				pass('fromHistoryJSON() roundtrip preserves data');
+			} else {
+				fail('fromHistoryJSON() roundtrip', 'Data mismatch');
+			}
+		} catch (e) {
+			fail('fromHistoryJSON() roundtrip', e);
+		}
+
+		// Test toChatlogString
+		try {
+			const chatlog = userMsg.toChatlogString();
+			if (typeof chatlog === 'string' && chatlog.length > 0) {
+				pass(`toChatlogString(): ${chatlog.length} chars`);
+			} else {
+				fail('toChatlogString()', 'Empty or invalid result');
+			}
+		} catch (e) {
+			fail('toChatlogString()', e);
+		}
+	} else {
+		warn('No user message found to test ClaudeMessage properties');
+	}
+
+	// Test file operations
+	console.log('\n--- Testing File Operations ---');
+
+	// Find messages with files
+	const msgWithFiles = messages.find(m => m.files.length > 0);
+	if (msgWithFiles) {
+		const file = msgWithFiles.files[0];
+		console.log(`Testing with file: ${file.file_name}`);
+
+		// Test parseFileFromAPI
+		try {
+			const apiData = file.toApiFormat();
+			const parsed = parseFileFromAPI(apiData, conversation);
+			const expectedType = file.constructor.name;
+			const actualType = parsed.constructor.name;
+			if (expectedType === actualType) {
+				pass(`parseFileFromAPI() correctly identifies ${expectedType}`);
+			} else {
+				fail('parseFileFromAPI()', `Expected ${expectedType}, got ${actualType}`);
+			}
+		} catch (e) {
+			fail('parseFileFromAPI()', e);
+		}
+
+		// Test download (if not ClaudeAttachment)
+		if (!(file instanceof ClaudeAttachment)) {
+			try {
+				const downloadUrl = file.getDownloadUrl();
+				if (downloadUrl) {
+					pass(`getDownloadUrl(): ${downloadUrl.slice(0, 60)}...`);
+
+					const blob = await file.download();
+					if (blob && blob.size > 0) {
+						pass(`download(): ${blob.size} bytes`);
+
+						// Test addFile with existing file (re-upload)
+						try {
+							const reuploadTestMsg = new ClaudeMessage(conversation);
+							const reuploaded = await reuploadTestMsg.addFile(file);
+							if (reuploaded) {
+								const reuploadType = reuploaded.constructor.name;
+								pass(`addFile(existingFile) returned ${reuploadType}: ${reuploaded.file_name}`);
+							} else {
+								fail('addFile(existingFile)', 'Returned null');
+							}
+						} catch (e) {
+							fail('addFile(existingFile)', e);
+						}
+					} else {
+						fail('download()', 'Empty blob');
+					}
+				} else {
+					warn('No download URL available for file');
+				}
+			} catch (e) {
+				fail('File download/reupload', e);
+			}
+		} else {
+			pass('ClaudeAttachment detected (no download needed - inline content)');
+		}
+	} else {
+		warn('No messages with files found - skipping file tests');
+	}
+
+	// Test ClaudeMessage modification methods
+	console.log('\n--- Testing ClaudeMessage Modification ---');
+
+	// Create a fresh message for testing modifications
+	const testMsg = new ClaudeMessage(conversation);
+	testMsg.text = 'Test message content';
+
+	// Test text setter
+	if (testMsg.text === 'Test message content') {
+		pass('text setter works');
+	} else {
+		fail('text setter', 'Text not set correctly');
+	}
+
+	// Test clearFiles
+	testMsg.attachFile(ClaudeAttachment.fromText('test', 'test.txt'));
+	testMsg.clearFiles();
+	if (testMsg.files.length === 0) {
+		pass('clearFiles() removes all files');
+	} else {
+		fail('clearFiles()', 'Files not cleared');
+	}
+
+	// Test removeToolCalls
+	testMsg.content = [
+		{ type: 'text', text: 'Hello' },
+		{ type: 'tool_use', id: '123', name: 'test' },
+		{ type: 'tool_result', tool_use_id: '123' }
+	];
+	testMsg.removeToolCalls();
+	if (testMsg.content.length === 1 && testMsg.content[0].type === 'text') {
+		pass('removeToolCalls() strips tool content');
+	} else {
+		fail('removeToolCalls()', `Expected 1 text item, got ${testMsg.content.length} items`);
+	}
+
+	// Test addFile with string (creates attachment or code exec file)
+	console.log('\n--- Testing addFile ---');
+	try {
+		const addedFile = await testMsg.addFile('Test file content', 'test-content.txt');
+		const expectedType = convData.settings?.enabled_monkeys_in_a_barrel
+			? 'ClaudeCodeExecutionFile'
+			: 'ClaudeAttachment';
+		const actualType = addedFile.constructor.name;
+		if (actualType === expectedType) {
+			pass(`addFile(string) creates ${expectedType}`);
+		} else {
+			warn(`addFile(string) created ${actualType}, expected ${expectedType}`);
+		}
+	} catch (e) {
+		fail('addFile(string)', e);
+	}
+
+	// Test toCompletionJSON
+	console.log('\n--- Testing toCompletionJSON ---');
+	const completionMsg = new ClaudeMessage(conversation);
+	completionMsg.text = 'Test prompt';
+	completionMsg.sender = 'human';
+
+	try {
+		const completionJson = completionMsg.toCompletionJSON();
+		if (completionJson.prompt === 'Test prompt' &&
+			completionJson.parent_message_uuid &&
+			Array.isArray(completionJson.attachments) &&
+			Array.isArray(completionJson.files)) {
+			pass('toCompletionJSON() produces valid structure');
+		} else {
+			fail('toCompletionJSON()', 'Missing required fields');
+		}
+	} catch (e) {
+		fail('toCompletionJSON()', e);
+	}
+
+	// Optional: Send a test message with all files reuploaded
+	if (sendMessage) {
+		console.log('\n--- Testing sendMessageAndWaitForResponse ---');
+		warn('This will send a real message to Claude!');
+
+		const testPrompt = new ClaudeMessage(conversation);
+		testPrompt.text = 'This is a test message from testClaudeAPI(). Please respond with just "Test received." and nothing else.';
+		testPrompt.sender = 'human';
+
+		// Collect all unique files from all messages
+		const allFiles = [];
+		const seenIds = new Set();
+		for (const msg of messages) {
+			for (const file of msg.files) {
+				const id = file.file_uuid || file.file_name;
+				if (!seenIds.has(id)) {
+					seenIds.add(id);
+					allFiles.push(file);
+				}
+			}
+		}
+
+		console.log(`Found ${allFiles.length} unique files to reupload`);
+
+		// Re-upload all files using addFile()
+		for (const fileToReupload of allFiles) {
+			try {
+				const reuploaded = await testPrompt.addFile(fileToReupload);
+				const action = fileToReupload instanceof ClaudeAttachment ? 'Included' : 'Re-uploaded';
+				pass(`${action} file via addFile(): ${reuploaded.file_name} (${reuploaded.constructor.name})`);
+			} catch (e) {
+				fail(`addFile(${fileToReupload.file_name})`, e.message);
+			}
+		}
+
+		// Also add a new text attachment via addFile(string)
+		try {
+			const testContent = `Test attachment created at ${new Date().toISOString()}`;
+			const newAttachment = await testPrompt.addFile(testContent, 'test-attachment.txt');
+			pass(`addFile(string) created: ${newAttachment.file_name} (${newAttachment.constructor.name})`);
+		} catch (e) {
+			fail('addFile(string)', e.message);
+		}
+
+		try {
+			const response = await conversation.sendMessageAndWaitForResponse(testPrompt);
+			if (response && response.uuid) {
+				pass(`Message sent and response received: ${response.uuid}`);
+				console.log(`  Response text: "${response.text.slice(0, 100)}..."`);
+			} else {
+				fail('sendMessageAndWaitForResponse()', 'No response received');
+			}
+		} catch (e) {
+			fail('sendMessageAndWaitForResponse()', e);
+		}
+	}
+
+	// Summary
+	console.log('\n=== Test Summary ===');
+	console.log(`Passed: ${results.passed.length}`);
+	console.log(`Failed: ${results.failed.length}`);
+	console.log(`Warnings: ${results.warnings.length}`);
+
+	if (results.failed.length > 0) {
+		console.log('\nFailed tests:');
+		for (const f of results.failed) {
+			console.log(`  - ${f.test}: ${f.error}`);
+		}
+	}
+
+	return results;
+};

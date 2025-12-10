@@ -25,10 +25,10 @@
 	const ATTACHMENT_DELIMITER_REGEX = /\n*=====ATTACHMENT_BEGIN: .+?=====\n[\s\S]*?\n=====ATTACHMENT_END=====/g;
 
 	//#region Export format handlers
-	function formatTxtExport(conversationData, conversationId) {
+	function formatTxtExport(conversationData, messages, conversationId) {
 		let output = `Title: ${conversationData.name}\nDate: ${conversationData.updated_at}\n\n`;
 
-		for (const message of conversationData.chat_messages) {
+		for (const message of messages) {
 			// Message boundary
 			const roleDelimiter = message.sender === ROLES.USER.apiName ? ROLES.USER.exportDelimiter : ROLES.ASSISTANT.exportDelimiter;
 			const isoTimestamp = message.created_at || message.updated_at;
@@ -46,24 +46,29 @@
 				}
 			}
 
-			// Files/attachments (user messages only)
-			//if (message.sender === ROLES.USER.apiName) {
-			if (message.files_v2 && message.files_v2.length > 0) {
-				output += `[${EXPORT_TAG_PREFIX}files_v2]\n${JSON.stringify(message.files_v2)}\n\n`;
+			// Files - split into files_v2 (ClaudeFile/ClaudeCodeExecutionFile) and attachments (ClaudeAttachment)
+			const files_v2 = message.files
+				.filter(f => !(f instanceof ClaudeAttachment))
+				.map(f => f.toApiFormat());
+			const attachments = message.files
+				.filter(f => f instanceof ClaudeAttachment)
+				.map(f => f.toApiFormat());
+
+			if (files_v2.length > 0) {
+				output += `[${EXPORT_TAG_PREFIX}files_v2]\n${JSON.stringify(files_v2)}\n\n`;
 			}
 
-			if (message.attachments && message.attachments.length > 0) {
-				output += `[${EXPORT_TAG_PREFIX}attachments]\n${JSON.stringify(message.attachments)}\n\n`;
+			if (attachments.length > 0) {
+				output += `[${EXPORT_TAG_PREFIX}attachments]\n${JSON.stringify(attachments)}\n\n`;
 			}
-			//}
 		}
 
 		return output;
 	}
 
-	function formatJsonlExport(conversationData, conversationId) {
+	function formatJsonlExport(conversationData, messages, conversationId) {
 		// Simple JSONL - just role and text
-		return conversationData.chat_messages.map(msg => {
+		return messages.map(msg => {
 			return JSON.stringify({
 				role: msg.sender === ROLES.USER.apiName ? ROLES.USER.jsonlName : ROLES.ASSISTANT.jsonlName,
 				content: ClaudeConversation.extractMessageText(msg)
@@ -71,34 +76,34 @@
 		}).join('\n');
 	}
 
-	function formatLibrechatExport(conversationData, conversationId) {
-		const processedMessages = conversationData.chat_messages.map((msg) => {
+	function formatLibrechatExport(conversationData, messages, conversationId) {
+		const processedMessages = messages.map((msg) => {
 			// Convert attachments to LibreChat file format
 			const files = [];
 			let attachmentText = '';
 
-			if (msg.attachments && msg.attachments.length > 0) {
-				for (const attachment of msg.attachments) {
-					const text = attachment.extracted_content || '';
+			// Get attachments from message.files (filter for ClaudeAttachment instances)
+			const attachments = msg.files.filter(f => f instanceof ClaudeAttachment);
+			for (const attachment of attachments) {
+				const text = attachment.extracted_content || '';
 
-					// Add to files array (survives re-export, we can read it back)
-					files.push({
-						file_id: crypto.randomUUID(),
-						bytes: attachment.file_size || text.length || 0,
-						context: 'message_attachment',
-						filename: attachment.file_name || 'unknown',
-						object: 'file',
-						source: 'text',
-						text: text,
-						type: attachment.file_type || 'text/plain'
-					});
+				// Add to files array (survives re-export, we can read it back)
+				files.push({
+					file_id: crypto.randomUUID(),
+					bytes: attachment.file_size || text.length || 0,
+					context: 'message_attachment',
+					filename: attachment.file_name || 'unknown',
+					object: 'file',
+					source: 'text',
+					text: text,
+					type: attachment.file_type || 'text/plain'
+				});
 
-					// Also embed inline (so LibreChat's AI can see it)
-					if (text) {
-						attachmentText += `\n=====ATTACHMENT_BEGIN: ${attachment.file_name || 'unknown'}=====\n`;
-						attachmentText += text;
-						attachmentText += `\n=====ATTACHMENT_END=====\n\n`;
-					}
+				// Also embed inline (so LibreChat's AI can see it)
+				if (text) {
+					attachmentText += `\n=====ATTACHMENT_BEGIN: ${attachment.file_name || 'unknown'}=====\n`;
+					attachmentText += text;
+					attachmentText += `\n=====ATTACHMENT_END=====\n\n`;
 				}
 			}
 
@@ -174,17 +179,20 @@
 		return `${name}-${uuid}${ext}`;
 	}
 
-	async function formatZipExport(conversationData, conversationId, loadingModal) {
+	async function formatZipExport(conversationData, messages, conversationId, loadingModal) {
 		const zip = new JSZip();
 
 		// Generate the txt content
-		const txtContent = formatTxtExport(conversationData, conversationId);
+		const txtContent = formatTxtExport(conversationData, messages, conversationId);
 		zip.file('conversation.txt', txtContent);
 
-		// Collect all files_v2 from messages as ClaudeFile instances
-		const allFiles = conversationData.chat_messages.flatMap(msg =>
-			(msg.files_v2 || []).map(f => new ClaudeFile(f))
-		).filter(f => f.getDownloadUrl());
+		// Collect all downloadable files (ClaudeFile and ClaudeCodeExecutionFile, not ClaudeAttachment)
+		const allFiles = messages.flatMap(msg =>
+			msg.files.filter(f =>
+				(f instanceof ClaudeFile || f instanceof ClaudeCodeExecutionFile) &&
+				f.getDownloadUrl()
+			)
+		);
 
 		// Phase 1: Download all files first
 		const filesToZipUp = [];
@@ -228,18 +236,18 @@
 	}
 	//#endregion
 
-	async function formatExport(conversationData, format, conversationId, loadingModal) {
+	async function formatExport(conversationData, messages, format, conversationId, loadingModal) {
 		switch (format) {
 			case 'txt':
-				return formatTxtExport(conversationData, conversationId);
+				return formatTxtExport(conversationData, messages, conversationId);
 			case 'jsonl':
-				return formatJsonlExport(conversationData, conversationId);
+				return formatJsonlExport(conversationData, messages, conversationId);
 			case 'librechat':
-				return formatLibrechatExport(conversationData, conversationId);
+				return formatLibrechatExport(conversationData, messages, conversationId);
 			case 'raw':
 				return formatRawExport(conversationData, conversationId);
 			case 'zip':
-				return formatZipExport(conversationData, conversationId, loadingModal);
+				return formatZipExport(conversationData, messages, conversationId, loadingModal);
 			default:
 				throw new Error(`Unsupported format: ${format}`);
 		}
@@ -281,9 +289,14 @@
 	}
 
 	async function downloadFilesFromMessages(messages, loadingModal) {
+		// Get all downloadable files from ClaudeMessage instances
+		// ClaudeFile and ClaudeCodeExecutionFile can be downloaded, ClaudeAttachment cannot
 		const allFiles = messages.flatMap(msg =>
-			(msg.files_v2 || []).map(f => new ClaudeFile(f))
-		).filter(f => f.getDownloadUrl());
+			msg.files.filter(f =>
+				(f instanceof ClaudeFile || f instanceof ClaudeCodeExecutionFile) &&
+				f.getDownloadUrl()
+			)
+		);
 
 		if (allFiles.length === 0) return [];
 
@@ -344,37 +357,43 @@
 			downloadedFiles.map(df => df.upload(orgId))
 		);
 
-		// Build mappings: old UUID -> new ClaudeFile or ClaudeAttachment
-		const fileUuidMap = new Map();
-		const attachmentMap = new Map();
-
+		// Build mapping: old UUID -> new file instance
+		const fileMap = new Map();
 		downloadedFiles.forEach((df, index) => {
 			const result = uploadResults[index];
-			if (!result) return;
-
-			if (result instanceof ClaudeFile) {
-				fileUuidMap.set(df.originalUuid, result);
-			} else {
-				attachmentMap.set(df.originalUuid, result);
+			if (result) {
+				fileMap.set(df.originalUuid, result);
 			}
 		});
 
-		// Remap messages
-		return messages.map(msg => ({
-			...msg,
-			files_v2: (msg.files_v2 || [])
-				.map(f => fileUuidMap.get(f.file_uuid)?.toApiFormat())
-				.filter(Boolean),
-			files: (msg.files_v2 || [])
-				.map(f => fileUuidMap.get(f.file_uuid)?.file_uuid)
-				.filter(Boolean),
-			attachments: [
-				...(msg.attachments || []),
-				...(msg.files_v2 || [])
-					.map(f => attachmentMap.get(f.file_uuid)?.toApiFormat())
-					.filter(Boolean)
-			]
-		}));
+		// Update each message's files
+		for (const msg of messages) {
+			// Get attachments (ClaudeAttachment) - these don't need remapping
+			const attachments = msg.files.filter(f => f instanceof ClaudeAttachment);
+
+			// Get downloadable files and remap them
+			const downloadableFiles = msg.files.filter(f =>
+				f instanceof ClaudeFile || f instanceof ClaudeCodeExecutionFile
+			);
+
+			// Clear and rebuild files array
+			msg.clearFiles();
+
+			// Add back attachments as-is
+			for (const attachment of attachments) {
+				msg.attachFile(attachment);
+			}
+
+			// Add remapped files
+			for (const oldFile of downloadableFiles) {
+				const newFile = fileMap.get(oldFile.file_uuid);
+				if (newFile) {
+					msg.attachFile(newFile);
+				}
+			}
+		}
+
+		return messages;
 	}
 
 	async function downloadAndReuploadFiles(messages, loadingModal) {
@@ -399,8 +418,9 @@
 
 		const lines = text.slice(contentStart).split('\n');
 
-		const messages = [];
-		let currentMessage = null;
+		// First pass: parse into raw message data
+		const rawMessages = [];
+		let currentRaw = null;
 		let currentTag = null;
 		let textBuffer = '';
 
@@ -411,7 +431,7 @@
 				const contentType = currentTag.substring(8); // Remove "content-" prefix
 
 				if (contentType === 'text') {
-					currentMessage.content.push({
+					currentRaw.content.push({
 						type: 'text',
 						text: textBuffer.trim()
 					});
@@ -420,21 +440,16 @@
 					try {
 						const jsonData = JSON.parse(textBuffer.trim());
 						if (!jsonData.type) jsonData.type = contentType;
-						currentMessage.content.push(jsonData);
+						currentRaw.content.push(jsonData);
 					} catch (error) {
 						warnings.push(`Failed to parse [content-${contentType}] block: ${error.message}`);
 					}
 				}
 			} else {
-				// Message property
+				// Message property (files_v2, attachments)
 				try {
 					const jsonData = JSON.parse(textBuffer.trim());
-					currentMessage[currentTag] = jsonData;
-
-					// Duplicate files_v2 to files (array of UUIDs)
-					if (currentTag === 'files_v2') {
-						currentMessage.files = jsonData.map(f => f.file_uuid);
-					}
+					currentRaw[currentTag] = jsonData;
 				} catch (error) {
 					warnings.push(`Failed to parse [${currentTag}] block: ${error.message}`);
 				}
@@ -457,32 +472,26 @@
 					const role = marker === ROLES.USER.exportDelimiter ? ROLES.USER.apiName : ROLES.ASSISTANT.apiName;
 
 					// Check for consecutive messages of same role
-					if (currentMessage && currentMessage.sender === role) {
+					if (currentRaw && currentRaw.sender === role) {
 						throw new Error(`Consecutive [${marker}] blocks not allowed`);
 					}
 
 					// Push previous message
-					if (currentMessage) messages.push(currentMessage);
+					if (currentRaw) rawMessages.push(currentRaw);
 
-					// Start new message
-					currentMessage = {
+					// Start new raw message
+					currentRaw = {
 						sender: role,
 						content: [],
 						files_v2: [],
-						files: [],
 						attachments: [],
-						sync_sources: []
+						created_at: timestampStr ? new Date(parseInt(timestampStr)).toISOString() : null
 					};
-
-					// Store timestamp if present
-					if (timestampStr) {
-						currentMessage.created_at = new Date(parseInt(timestampStr)).toISOString();
-					}
 
 					currentTag = null;
 				} else {
 					// Content or property tag
-					if (!currentMessage) {
+					if (!currentRaw) {
 						throw new Error(`Found [${marker}] before any message role`);
 					}
 					currentTag = marker;
@@ -496,17 +505,38 @@
 
 		// Flush final content
 		flushTextBuffer();
-		if (currentMessage) messages.push(currentMessage);
+		if (currentRaw) rawMessages.push(currentRaw);
 
 		// Validation
-		if (messages.length === 0) {
+		if (rawMessages.length === 0) {
 			throw new Error('No messages found in file');
 		}
-		if (messages[0].sender !== ROLES.USER.apiName) {
+		if (rawMessages[0].sender !== ROLES.USER.apiName) {
 			throw new Error(`Conversation must start with a ${ROLES.USER.exportDelimiter} message`);
 		}
 
-		return { name: title, chat_messages: messages, warnings };
+		// Convert to ClaudeMessage instances
+		const conversation = new ClaudeConversation(getOrgId(), null);
+		const messages = rawMessages.map(raw => {
+			const msg = new ClaudeMessage(conversation);
+			msg.sender = raw.sender;
+			msg.content = raw.content;
+			msg.created_at = raw.created_at;
+
+			// Parse files_v2 into file instances
+			for (const f of raw.files_v2 || []) {
+				msg.attachFile(parseFileFromAPI(f, conversation));
+			}
+
+			// Parse attachments
+			for (const a of raw.attachments || []) {
+				msg.attachFile(parseFileFromAPI(a, conversation));
+			}
+
+			return msg;
+		});
+
+		return { name: title, messages, warnings };
 	}
 
 	async function parseZipImport(file, loadingModal, includeFiles) {
@@ -549,12 +579,14 @@
 				}
 			});
 
-			// Extract files from zip that match files_v2 in messages
-			const allFileRefs = parsedData.chat_messages.flatMap(msg =>
-				(msg.files_v2 || []).map(f => ({
-					uuid: f.file_uuid,
-					name: f.file_name
-				}))
+			// Extract files from zip that match downloadable files in messages
+			const allFileRefs = parsedData.messages.flatMap(msg =>
+				msg.files
+					.filter(f => f instanceof ClaudeFile || f instanceof ClaudeCodeExecutionFile)
+					.map(f => ({
+						uuid: f.file_uuid,
+						name: f.file_name
+					}))
 			);
 
 			for (let i = 0; i < allFileRefs.length; i++) {
@@ -593,41 +625,33 @@
 		};
 	}
 
-	function convertToPhantomMessages(chat_messages) {
-		const phantomMessages = [];
+	function convertToPhantomMessages(messages) {
+		// Takes ClaudeMessage[], sets UUIDs and parent links, returns same instances
 		let parentId = "00000000-0000-4000-8000-000000000000";
 
-		for (const message of chat_messages) {
-			const messageId = crypto.randomUUID();
+		for (const message of messages) {
 			const timestamp = message.created_at || new Date().toISOString();
 
-			// Build content array - add timestamps to each content item
-			const content = message.content.map(contentItem => {
-				const item = { ...contentItem };
-				if (!item.start_timestamp) item.start_timestamp = timestamp;
-				if (!item.stop_timestamp) item.stop_timestamp = timestamp;
-				if (!item.citations) item.citations = [];
-				return item;
-			});
+			message.uuid = crypto.randomUUID();
+			message.parent_message_uuid = parentId;
 
-			phantomMessages.push({
-				uuid: messageId,
-				parent_message_uuid: parentId,
-				sender: message.sender,
-				content: content,
-				created_at: timestamp,
-				files_v2: message.files_v2 || [],
-				files: message.files || [],
-				attachments: message.attachments || [],
-				sync_sources: []
-			});
-			parentId = messageId;
+			// Ensure timestamps on content items
+			for (const contentItem of message.content) {
+				if (!contentItem.start_timestamp) contentItem.start_timestamp = timestamp;
+				if (!contentItem.stop_timestamp) contentItem.stop_timestamp = timestamp;
+				if (!contentItem.citations) contentItem.citations = [];
+			}
+
+			if (!message.created_at) message.created_at = timestamp;
+
+			parentId = message.uuid;
 		}
 
-		return phantomMessages;
+		return messages;
 	}
 
 	async function storePhantomMessagesAndWait(conversationId, messages) {
+		// Takes ClaudeMessage[], serializes via toHistoryJSON() for storage
 		return new Promise((resolve) => {
 			const handler = (event) => {
 				if (event.data.type === 'PHANTOM_MESSAGES_STORED_CONFIRMED' &&
@@ -642,41 +666,48 @@
 			window.postMessage({
 				type: 'STORE_PHANTOM_MESSAGES',
 				conversationId,
-				phantomMessages: messages
+				phantomMessages: messages.map(m => m.toHistoryJSON())
 			}, '*');
 		});
 	}
 
-	async function createNewConversation(name, chat_messages, model) {
+	async function createNewConversation(name, messages, model) {
+		// Takes ClaudeMessage[] instead of raw chat_messages
 		const orgId = getOrgId();
 
 		// Create new conversation with parsed name
 		const conversation = new ClaudeConversation(orgId);
 		const newConvoId = await conversation.create(name, model);
 
-		// Build chatlog attachment
-		const cleanedContent = chat_messages
-			.map(msg => formatMessageForChatlog(msg))
+		// Build chatlog content from messages
+		const cleanedContent = messages
+			.map(msg => msg.toChatlogString())
 			.join('\n\n');
 
-		const chatlogAttachment = ClaudeAttachment.fromText(cleanedContent, "chatlog.txt");
-
-		// Collect all files from messages (attachments are inlined in chatlog)
-		const allFiles = chat_messages.flatMap(msg => msg.files_v2 || []);
-
-		// Send initial message
-		await conversation.sendMessageAndWaitForResponse(
-			"This conversation is imported from the attached chatlog.txt\nSimply say 'Acknowledged' and wait for user input.",
-			{
-				model: model,
-				attachments: [chatlogAttachment.toApiFormat()],
-				files: allFiles.map(f => f.file_uuid),
-				syncSources: []
-			}
+		// Collect all uploadable files (ClaudeFile and ClaudeCodeExecutionFile, not ClaudeAttachment)
+		const allFiles = messages.flatMap(msg =>
+			msg.files.filter(f => f instanceof ClaudeFile || f instanceof ClaudeCodeExecutionFile)
 		);
 
+		// Build message with chatlog and files
+		const importMessage = new ClaudeMessage(conversation);
+		importMessage.text = "This conversation is imported from the attached chatlog.txt\nSimply say 'Acknowledged' and wait for user input.";
+		importMessage.sender = 'human';
+		if (model) importMessage.model = model;
+
+		// Add chatlog (conversation metadata - force inline)
+		await importMessage.addFile(cleanedContent, "chatlog.txt", true);
+
+		// Re-upload files to new conversation
+		for (const f of allFiles) {
+			await importMessage.addFile(f);
+		}
+
+		// Send initial message
+		await conversation.sendMessageAndWaitForResponse(importMessage);
+
 		// Convert and store phantom messages
-		const phantomMessages = convertToPhantomMessages(chat_messages);
+		const phantomMessages = convertToPhantomMessages(messages);
 		await storePhantomMessagesAndWait(newConvoId, phantomMessages);
 
 		// Navigate to new conversation
@@ -749,20 +780,30 @@
 			warnings.push('Multiple branches detected. Importing the current active branch.');
 		}
 
-		// Already in Claude format! Just need to rename fields
-		const chat_messages = branch.map(msg => ({
-			sender: msg.sender,
-			content: msg.content || [],
-			created_at: msg.created_at,
-			files_v2: msg.files_v2 || [],
-			files: msg.files || [],
-			attachments: msg.attachments || [],
-			sync_sources: msg.sync_sources || []
-		}));
+		// Convert to ClaudeMessage instances
+		const conversation = new ClaudeConversation(getOrgId(), null);
+		const messages = branch.map(raw => {
+			const msg = new ClaudeMessage(conversation);
+			msg.sender = raw.sender;
+			msg.content = raw.content || [];
+			msg.created_at = raw.created_at;
+
+			// Parse files_v2 into file instances
+			for (const f of raw.files_v2 || []) {
+				msg.attachFile(parseFileFromAPI(f, conversation));
+			}
+
+			// Parse attachments
+			for (const a of raw.attachments || []) {
+				msg.attachFile(parseFileFromAPI(a, conversation));
+			}
+
+			return msg;
+		});
 
 		return {
 			name: data.name || 'Imported Conversation',
-			chat_messages,
+			messages,
 			warnings
 		};
 	}
@@ -782,66 +823,62 @@
 			warnings.push('Multiple branches detected. Importing rightmost branch.');
 		}
 
-		let messages;
+		let rawMessages;
 
 		if (data.recursive) {
 			// Recursive format - nested children
-			messages = flattenRecursiveTree(data.messages);
+			rawMessages = flattenRecursiveTree(data.messages);
 		} else {
 			// Sequential format - flat with parentMessageId
-			messages = extractLinearBranch(data.messages);
+			rawMessages = extractLinearBranch(data.messages);
 		}
 
-		if (messages.length === 0) {
+		if (rawMessages.length === 0) {
 			throw new Error('No messages found in file');
 		}
 
-		// Convert to internal format
-		const chat_messages = messages.map(msg => {
+		// Create conversation for ClaudeMessage instances
+		const conversation = new ClaudeConversation(getOrgId(), null);
+
+		// Convert to ClaudeMessage instances
+		const messages = rawMessages.map(raw => {
+			const msg = new ClaudeMessage(conversation);
+			msg.sender = raw.isCreatedByUser ? ROLES.USER.apiName : ROLES.ASSISTANT.apiName;
+			msg.content = extractLibrechatContent(raw);
+			msg.created_at = raw.createdAt;
+
 			// Convert files to attachments (text-based files only)
-			const attachments = [];
-			if (msg.files && Array.isArray(msg.files)) {
-				for (const file of msg.files) {
+			if (raw.files && Array.isArray(raw.files)) {
+				for (const file of raw.files) {
 					if (file.text) {
-						const attachment = new ClaudeAttachment({
+						// Transform LibreChat format to attachment API format
+						const attData = {
 							extracted_content: file.text,
 							file_name: file.name || 'unknown',
 							file_size: file.bytes || file.text.length,
 							file_type: file.type || 'text/plain'
-						});
-						attachments.push(attachment.toApiFormat());
+						};
+						msg.attachFile(parseFileFromAPI(attData, conversation));
 					}
 				}
 			}
 
-			return {
-				sender: msg.isCreatedByUser ? ROLES.USER.apiName : ROLES.ASSISTANT.apiName,
-				content: extractLibrechatContent(msg),
-				created_at: msg.createdAt,
-				files_v2: [],
-				files: [],
-				attachments: attachments,
-				sync_sources: []
-			};
+			return msg;
 		});
 
 		// Ensure conversation starts with user message
-		if (chat_messages.length > 0 && chat_messages[0].sender !== ROLES.USER.apiName) {
+		if (messages.length > 0 && messages[0].sender !== ROLES.USER.apiName) {
 			warnings.push('Conversation did not start with a user message. A placeholder was added.');
-			chat_messages.unshift({
-				sender: ROLES.USER.apiName,
-				content: [{ type: 'text', text: '[Conversation imported from LibreChat]' }],
-				created_at: chat_messages[0].created_at,
-				files_v2: [],
-				files: [],
-				attachments: [],
-				sync_sources: []
-			});
+			const placeholder = new ClaudeMessage(conversation);
+			placeholder.sender = ROLES.USER.apiName;
+			placeholder.content = [{ type: 'text', text: '[Conversation imported from LibreChat]' }];
+			placeholder.created_at = messages[0].created_at;
+			messages.unshift(placeholder);
 		}
 
 		return {
 			name: data.title || 'Imported Conversation',
-			chat_messages,
+			messages,
 			warnings
 		};
 	}
@@ -965,53 +1002,48 @@
 			return;
 		}
 
-		let { chat_messages, warnings, name } = parsedData
+		let { messages, warnings, name } = parsedData;
 
-		// Filter based on toggles
+		// Filter based on toggles using ClaudeMessage methods
 		if (!includeFiles) {
-			chat_messages = chat_messages.map(msg => ({
-				...msg,
-				files_v2: [],
-				files: [],
-				attachments: []
-			}));
+			for (const msg of messages) {
+				msg.clearFiles();
+			}
 			downloadedFiles = null;
 		}
 
 		if (!includeToolCalls) {
-			chat_messages = chat_messages.map(msg => ({
-				...msg,
-				content: msg.content.filter(item =>
-					item.type !== 'tool_use' && item.type !== 'tool_result'
-				)
-			}));
+			for (const msg of messages) {
+				msg.removeToolCalls();
+			}
 		}
 
-		chat_messages = chat_messages.map(msg => ({
-			...msg,
-			content: msg.content.filter(item =>
-				item.type !== 'token_budget'
-			)
-		}));
+		// Remove token_budget content items
+		for (const msg of messages) {
+			msg.content = msg.content.filter(item => item.type !== 'token_budget');
+		}
 
 		// Show warnings modal if needed
 		if (warnings.length > 0) {
 			const proceed = await showWarningsModal(warnings);
-			if (!proceed) return;
+			if (!proceed) {
+				loadingModal.destroy();
+				return;
+			}
 		}
-		console.log('Parsed import data:', { name, chat_messages, downloadedFiles });
+		console.log('Parsed import data:', { name, messages, downloadedFiles });
 		try {
 			if (includeFiles) {
 				if (downloadedFiles) {
 					// Zip import - files already extracted, just upload and remap
-					chat_messages = await uploadAndRemapFiles(chat_messages, downloadedFiles, loadingModal);
+					messages = await uploadAndRemapFiles(messages, downloadedFiles, loadingModal);
 				} else {
 					// Non-zip import - download from URLs and reupload
-					chat_messages = await downloadAndReuploadFiles(chat_messages, loadingModal);
+					messages = await downloadAndReuploadFiles(messages, loadingModal);
 				}
 			}
 
-			await createNewConversation(name, chat_messages, model);
+			await createNewConversation(name, messages, model);
 			// Navigation happens in createNewConversation, loading modal cleaned up automatically
 		} catch (error) {
 			console.error('Import failed:', error);
@@ -1072,8 +1104,8 @@
 		}
 
 		try {
-			// Convert and store phantom messages
-			const phantomMessages = convertToPhantomMessages(parsedData.chat_messages);
+			// Convert and store phantom messages (parsedData.messages is ClaudeMessage[])
+			const phantomMessages = convertToPhantomMessages(parsedData.messages);
 			await storePhantomMessagesAndWait(conversationId, phantomMessages);
 
 			// Reload to show changes
@@ -1164,9 +1196,10 @@
 					const orgId = getOrgId();
 					const conversation = new ClaudeConversation(orgId, conversationId);
 					const conversationData = await conversation.getData(exportTree);
+					const messages = await conversation.getMessages(exportTree);
 
 					const filename = `Claude_export_${conversationData.name}_${conversationId}.${extension}`;
-					const exportContent = await formatExport(conversationData, format, conversationId, loadingModal);
+					const exportContent = await formatExport(conversationData, messages, format, conversationId, loadingModal);
 
 					// Handle blob vs string content
 					const blob = exportContent instanceof Blob

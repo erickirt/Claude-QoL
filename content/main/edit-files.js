@@ -8,6 +8,11 @@
 
 	const TEMP_STYLE_NAME = 'advanced_edit_temporary_style';
 	const TEMP_STYLE_STORAGE_KEY = 'temp_style_id';
+
+	// Working message for the current edit session
+	let editMessage = null;
+	// Map DOM elements to file instances for tracking
+	const fileElementMap = new Map(); // HTMLElement -> ClaudeFile|ClaudeCodeExecutionFile|ClaudeAttachment
 	//#endregion
 
 	//#region Edit Button Interception
@@ -167,30 +172,40 @@
 		const orgId = urlParts[urlParts.indexOf('organizations') + 1];
 		const conversationId = urlParts[urlParts.indexOf('chat_conversations') + 1];
 
-		const messageData = await getMessageBeingEdited(orgId, conversationId, bodyData.parent_message_uuid);
+		// Create conversation and get messages
+		const conversation = new ClaudeConversation(orgId, conversationId);
+		const messages = await conversation.getMessages(true);
+
+		// Find the existing message being edited
+		const existingMessage = messages.find(
+			m => m.parent_message_uuid === bodyData.parent_message_uuid && m.sender === 'human'
+		);
+
+		// Create working message for editing
+		editMessage = new ClaudeMessage(conversation);
+		editMessage.text = bodyData.prompt.trim();
+		editMessage.parent_message_uuid = bodyData.parent_message_uuid;
+
+		// Copy files from existing message (if any)
+		if (existingMessage) {
+			for (const file of existingMessage.files) {
+				editMessage.attachFile(file);
+			}
+		}
 
 		// Extract style text from personalized_styles array
 		const originalStyle = bodyData.personalized_styles?.[0];
 		let originalStyleText = originalStyle?.prompt || '';
 		if (originalStyleText == "Normal") originalStyleText = '';
 
-		const enrichedData = {
-			prompt: bodyData.prompt.trim(),
-			files: bodyData.files || [],
-			attachments: bodyData.attachments || [],
-			parent_message_uuid: bodyData.parent_message_uuid,
-			filesMetadata: messageData?.files_v2 || [],
-			styleText: originalStyleText
-		};
-
 		return new Promise((resolve, reject) => {
 			const content = document.createElement('div');
 			content.className = 'space-y-4';
 
-			const filesSection = buildFilesSection(enrichedData);
+			const filesSection = buildFilesSection();
 			content.appendChild(filesSection);
 
-			const editorSection = buildEditorSection(enrichedData);
+			const editorSection = buildEditorSection(editMessage.text, originalStyleText);
 			content.appendChild(editorSection);
 
 			const modal = new ClaudeModal('Edit Message', content);
@@ -201,6 +216,7 @@
 
 			// Add cancel button
 			modal.addCancel('Cancel', () => {
+				cleanupEditState();
 				reject(new Error('Edit cancelled by user'));
 			});
 
@@ -216,6 +232,7 @@
 					const modifiedRequest = await formatNewRequest(url, config, modalData);
 					console.log("Resolving request with modified data:", modifiedRequest);
 					loadingModal.destroy();
+					cleanupEditState();
 					resolve(modifiedRequest);
 					return true; // Close modal
 				} catch (error) {
@@ -235,7 +252,12 @@
 		});
 	}
 
-	function buildFilesSection(data) {
+	function cleanupEditState() {
+		editMessage = null;
+		fileElementMap.clear();
+	}
+
+	function buildFilesSection() {
 		const container = document.createElement('div');
 		container.className = 'border border-border-300 rounded-lg p-3';
 
@@ -251,22 +273,15 @@
 		filesList.style.maxHeight = '200px';
 		filesList.id = 'files-list';
 
-		// Add real files from the request
-		if (data.filesMetadata && data.filesMetadata.length > 0) {
-			data.filesMetadata.forEach(file => {
-				if (data.files.includes(file.file_uuid)) {
-					const fileItem = buildFileItem(file);
-					filesList.appendChild(fileItem);
-				}
-			});
-		}
-
-		// Add attachments
-		if (data.attachments && data.attachments.length > 0) {
-			data.attachments.forEach(attachment => {
-				const item = buildAttachmentItem(attachment);
-				filesList.appendChild(item);
-			});
+		// Add files from editMessage
+		for (const file of editMessage.files) {
+			// ClaudeAttachment only in non-code-execution
+			// ClaudeFile and ClaudeCodeExecutionFile both go to buildFileItem
+			const item = file instanceof ClaudeAttachment
+				? buildAttachmentItem(file)
+				: buildFileItem(file);
+			fileElementMap.set(item, file);
+			filesList.appendChild(item);
 		}
 
 		container.appendChild(filesList);
@@ -278,7 +293,7 @@
 		return container;
 	}
 
-	function buildEditorSection(data) {
+	function buildEditorSection(promptText, styleText) {
 		const container = document.createElement('div');
 		container.className = 'border border-border-300 rounded-lg p-3';
 
@@ -294,11 +309,11 @@
 		const promptLabel = document.createElement('span');
 		promptLabel.className = 'text-sm text-text-200';
 		promptLabel.textContent = 'Prompt';
-		const styleLabel = document.createElement('span');
-		styleLabel.className = 'text-sm text-text-200';
-		styleLabel.textContent = 'Style';
+		const styleLabelEl = document.createElement('span');
+		styleLabelEl.className = 'text-sm text-text-200';
+		styleLabelEl.textContent = 'Style';
 		toggle.insertBefore(promptLabel, toggle.firstChild);
-		toggle.appendChild(styleLabel);
+		toggle.appendChild(styleLabelEl);
 		header.appendChild(toggle);
 		container.appendChild(header);
 
@@ -306,7 +321,7 @@
 		const promptTA = document.createElement('textarea');
 		promptTA.id = 'message-text';
 		promptTA.className = CLAUDE_CLASSES.INPUT;
-		promptTA.value = data.prompt;
+		promptTA.value = promptText;
 		promptTA.placeholder = 'Enter your message...';
 		promptTA.style.resize = 'none';
 		promptTA.style.minHeight = '150px';
@@ -317,7 +332,7 @@
 		const styleTA = document.createElement('textarea');
 		styleTA.id = 'style-text';
 		styleTA.className = CLAUDE_CLASSES.INPUT;
-		styleTA.value = data.styleText;
+		styleTA.value = styleText;
 		styleTA.placeholder = 'Enter style instructions...';
 		styleTA.style.resize = 'none';
 		styleTA.style.minHeight = '150px';
@@ -415,15 +430,15 @@
 
 
 	function buildFileItem(file) {
+		// Accepts ClaudeFile or ClaudeCodeExecutionFile
 		const item = document.createElement('div');
-		item.className = CLAUDE_CLASSES.LIST_ITEM + ' flex items-center gap-2'
-		item.dataset.fileUuid = file.file_uuid;
-		item.dataset.fileType = 'files_v2';
+		item.className = CLAUDE_CLASSES.LIST_ITEM + ' flex items-center gap-2';
 
 		// File preview/icon
 		const icon = document.createElement('div');
 		icon.className = 'w-8 h-8 bg-bg-300 rounded overflow-hidden flex items-center justify-center';
 
+		// Only ClaudeFile has thumbnail_asset (ClaudeCodeExecutionFile does not)
 		if (file.file_kind === 'image' && file.thumbnail_asset?.url) {
 			const img = document.createElement('img');
 			img.src = file.thumbnail_asset.url;
@@ -444,18 +459,22 @@
 		// Remove button
 		const removeBtn = createClaudeButton('Remove', 'secondary');
 		removeBtn.classList.add('!min-w-0', '!px-2', '!h-7', '!text-xs');
-		removeBtn.onclick = () => item.remove();
+		removeBtn.onclick = () => handleRemoveFile(item, file);
 		item.appendChild(removeBtn);
 		return item;
 	}
 
+	function handleRemoveFile(element, file) {
+		element.remove();
+		fileElementMap.delete(element);
+		// ClaudeFile/ClaudeCodeExecutionFile have file_uuid, ClaudeAttachment has file_name
+		editMessage.removeFile(file.file_uuid || file.file_name);
+	}
+
 	function buildAttachmentItem(attachment) {
+		// Accepts ClaudeAttachment instance
 		const item = document.createElement('div');
-		item.className = CLAUDE_CLASSES.LIST_ITEM + ' flex items-center gap-2'
-		item.dataset.fileType = 'attachment';
-		item.dataset.fileName = attachment.file_name;
-		// Store the full attachment data for reconstruction
-		item.dataset.attachmentData = JSON.stringify(attachment);
+		item.className = CLAUDE_CLASSES.LIST_ITEM + ' flex items-center gap-2';
 
 		// Attachment icon
 		const icon = document.createElement('div');
@@ -473,7 +492,7 @@
 		// Remove button
 		const removeBtn = createClaudeButton('Remove', 'secondary');
 		removeBtn.classList.add('!min-w-0', '!px-2', '!h-7', '!text-xs');
-		removeBtn.onclick = () => item.remove();
+		removeBtn.onclick = () => handleRemoveFile(item, attachment);
 		item.appendChild(removeBtn);
 
 		return item;
@@ -655,7 +674,6 @@
 	//#region File Handling
 	async function processSelectedFiles(files) {
 		const filesList = document.getElementById('files-list');
-		const orgId = getOrgId();
 
 		const filesArray = Array.from(files);
 		if (filesArray.length === 0) return;
@@ -672,17 +690,15 @@
 			filesList.appendChild(uploadingItem);
 
 			try {
-				// Upload and get full metadata back
-				const result = await ClaudeFile.upload(orgId, file, file.name);
+				// Use editMessage.addFile() which handles code execution vs non-code-execution
+				const result = await editMessage.addFile(file, file.name);
 
 				// Replace uploading item with real file/attachment item
-				let itemElement;
-				if (result instanceof ClaudeFile) {
-					itemElement = buildFileItem(result.toApiFormat());
-				} else {
-					// Document was converted to attachment
-					itemElement = buildAttachmentItem(result.toApiFormat());
-				}
+				// result could be ClaudeFile, ClaudeCodeExecutionFile, or ClaudeAttachment
+				const itemElement = result instanceof ClaudeAttachment
+					? buildAttachmentItem(result)
+					: buildFileItem(result);
+				fileElementMap.set(itemElement, result);
 				uploadingItem.replaceWith(itemElement);
 
 				// Decrement and update button
@@ -702,10 +718,7 @@
 				nameSpan.innerHTML = `${truncateFilename(file.name)} <span class="text-red-600 text-xs">(upload failed)</span>`;
 				nameSpan.title = file.name;
 
-				// Mark as failed and make remove button work
-				uploadingItem.dataset.failed = 'true';
-				uploadingItem.dataset.uploading = 'false';
-
+				// Make remove button work
 				const removeBtn = uploadingItem.querySelector('button');
 				removeBtn.disabled = false;
 				removeBtn.style.opacity = '1';
@@ -756,73 +769,27 @@
 			// Read the text content
 			const content = await readTextFile(file);
 
-			// Create attachment object
-			const attachment = {
-				file_name: file.name,
-				file_type: file.type || 'text/plain',
-				file_size: file.size,
-				extracted_content: content
-			};
+			// Use editMessage.addFile() with text content
+			// In code execution mode: returns ClaudeCodeExecutionFile
+			// In non-code-execution mode: returns ClaudeAttachment
+			const result = await editMessage.addFile(content, file.name);
 
-			// Add to the list
-			const attachmentItem = buildAttachmentItem(attachment);
-			filesList.appendChild(attachmentItem);
+			// Build appropriate item based on result type
+			const item = result instanceof ClaudeAttachment
+				? buildAttachmentItem(result)
+				: buildFileItem(result);
+			fileElementMap.set(item, result);
+			filesList.appendChild(item);
 		}
 	}
 
 	function collectModalData() {
-		const messageText = document.getElementById('message-text').value;
-		const styleText = document.getElementById('style-text').value;
-		const fileItems = document.querySelectorAll('#files-list > div');
-		const fileUuids = [];
-		const attachments = [];
-
-		fileItems.forEach(item => {
-			if (item.dataset.failed === 'true' || item.dataset.uploading === 'true') {
-				return;
-			}
-
-			if (item.dataset.fileType === 'files_v2') {
-				const uuid = item.dataset.fileUuid;
-				if (uuid) fileUuids.push(uuid);
-			} else if (item.dataset.fileType === 'attachment') {
-				const attachment = item.dataset.attachmentData;
-				if (attachment) attachments.push(JSON.parse(attachment));
-			}
-		});
-
+		// Update editMessage text from textarea
+		editMessage.text = document.getElementById('message-text').value;
+		// Files are already managed in editMessage._files via addFile/removeFile
 		return {
-			text: messageText,
-			styleText: styleText,
-			fileUuids: fileUuids,
-			attachments: attachments
+			styleText: document.getElementById('style-text').value
 		};
-	}
-
-	async function getMessageBeingEdited(orgId, conversationId, parentUuid) {
-		try {
-			const response = await fetch(
-				`/api/organizations/${orgId}/chat_conversations/${conversationId}?tree=False&rendering_mode=messages&render_all_tools=true`
-			);
-
-			if (!response.ok) {
-				console.error('Failed to fetch conversation data');
-				return null;
-			}
-
-			const data = await response.json();
-
-			// Find the message that has our parent UUID as its parent
-			const messageBeingEdited = data.chat_messages.find(
-				msg => msg.parent_message_uuid === parentUuid && msg.sender === 'human'
-			);
-
-			console.log('Found message being edited:', messageBeingEdited);
-			return messageBeingEdited;
-		} catch (error) {
-			console.error('Error fetching message data:', error);
-			return null;
-		}
 	}
 
 	async function readTextFile(file) {
@@ -835,8 +802,8 @@
 	}
 
 	async function formatNewRequest(url, config, modalData) {
-		const bodyData = JSON.parse(config.body);
-		const originalStyle = bodyData.personalized_styles?.[0];
+		const originalBody = JSON.parse(config.body);
+		const originalStyle = originalBody.personalized_styles?.[0];
 		let originalStyleText = originalStyle?.prompt || '';
 		if (originalStyleText == "Normal") originalStyleText = '';
 
@@ -844,11 +811,14 @@
 		const urlParts = url.split('/');
 		const orgId = urlParts[urlParts.indexOf('organizations') + 1];
 
+		// Get completion JSON from editMessage
+		const completionJson = editMessage.toCompletionJSON();
+
 		const modifiedBody = {
-			...bodyData,
-			prompt: modalData.text,
-			attachments: modalData.attachments,
-			files: modalData.fileUuids
+			...originalBody,
+			prompt: completionJson.prompt,
+			files: completionJson.files,
+			attachments: completionJson.attachments
 		};
 
 		// Only update style if it changed

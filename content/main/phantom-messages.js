@@ -41,10 +41,14 @@ async function getPhantomMessages(conversationId) {
 	const oldKey = `${OLD_FORK_PREFIX}${conversationId}`;
 	const newKey = `${PHANTOM_PREFIX}${conversationId}`;
 
+	const orgId = getOrgId();
+	const conversation = new ClaudeConversation(orgId, conversationId);
+
 	const localData = localStorage.getItem(newKey) || localStorage.getItem(oldKey);
 	if (localData) {
 		console.log(`[Migration] Migrating ${conversationId} to IndexedDB`);
-		const messages = JSON.parse(localData);
+		const messagesJson = JSON.parse(localData);
+		const messages = messagesJson.map(json => new ClaudeMessage(conversation, json));
 		await storePhantomMessages(conversationId, messages);
 		localStorage.removeItem(newKey);
 		localStorage.removeItem(oldKey);
@@ -57,7 +61,12 @@ async function getPhantomMessages(conversationId) {
 			if (event.data.type === 'PHANTOM_MESSAGES_RESPONSE' &&
 				event.data.conversationId === conversationId) {
 				window.removeEventListener('message', handler);
-				resolve(event.data.messages);
+				const messagesJson = event.data.messages;
+				if (messagesJson) {
+					resolve(messagesJson.map(json => new ClaudeMessage(conversation, json)));
+				} else {
+					resolve(null);
+				}
 			}
 		};
 
@@ -200,80 +209,55 @@ function reorderKeys(obj, referenceObj) {
 function injectPhantomMessages(data, phantomMessages) {
 	const timestamp = new Date().toISOString();
 	const referenceMsg = data.chat_messages[0];
-	let index = 0;
-	phantomMessages = phantomMessages.map(msg => {
-		let completeMsg = {
-			uuid: msg.uuid || crypto.randomUUID(),
-			text: msg.text || '',
-			parent_message_uuid: msg.parent_message_uuid || "00000000-0000-4000-8000-000000000000",
-			sender: msg.sender || 'human',
-			content: msg.content || [],
-			created_at: msg.created_at || timestamp,
-			updated_at: msg.updated_at || timestamp,
-			files_v2: msg.files_v2 || [],
-			files: msg.files || [],
-			index: 0,	// Will be set below
-			attachments: msg.attachments || [],
-			sync_sources: msg.sync_sources || [],
-			truncated: msg.truncated || false	// Is this referring to the summarization feature? Needs more testing
-		};
 
-		completeMsg.content = completeMsg.content.map(item => ({
-			start_timestamp: timestamp,
-			stop_timestamp: timestamp,
-			type: "text",
-			text: "",
-			citations: [],
-			...item
-		}));
+	// Add phantom marker to each message's content
+	for (const msg of phantomMessages) {
+		if (!msg.created_at) msg.created_at = timestamp;
+		if (!msg.updated_at) msg.updated_at = timestamp;
 
-
-		completeMsg.content.forEach(item => {
+		for (const item of msg.content) {
+			if (!item.start_timestamp) item.start_timestamp = timestamp;
+			if (!item.stop_timestamp) item.stop_timestamp = timestamp;
+			if (!item.citations) item.citations = [];
 			if (item.text !== undefined) {
 				item.text = item.text + '\n\n' + PHANTOM_MARKER;
 			}
-		});
-
-		// Reorder keys to match the reference message
-		if (referenceMsg) {
-			completeMsg = reorderKeys(completeMsg, referenceMsg);
 		}
+	}
 
-		return completeMsg;
-	});
-
-
+	// If last phantom is human, add an ack message
 	let lastPhantom = phantomMessages[phantomMessages.length - 1];
 	if (lastPhantom && lastPhantom.sender === 'human') {
-		const ackMessage = {
-			uuid: crypto.randomUUID(),
-			parent_message_uuid: lastPhantom.uuid,
-			sender: 'assistant',
-			content: [{
-				start_timestamp: timestamp,
-				stop_timestamp: timestamp,
-				type: "text",
-				text: "Acknowledged - end of previous conversation.\n\n" + PHANTOM_MARKER,
-				citations: []
-			}],
-			created_at: timestamp,
-			files_v2: [],
-			files: [],
-			attachments: [],
-			sync_sources: []
-		};
-
-		// Reorder keys to match reference if available
-		if (referenceMsg) {
-			phantomMessages.push(reorderKeys(ackMessage, referenceMsg));
-		} else {
-			phantomMessages.push(ackMessage);
-		}
+		const orgId = getOrgId();
+		const conversation = new ClaudeConversation(orgId, null);
+		const ackMessage = new ClaudeMessage(conversation);
+		ackMessage.uuid = crypto.randomUUID();
+		ackMessage.parent_message_uuid = lastPhantom.uuid;
+		ackMessage.sender = 'assistant';
+		ackMessage.created_at = timestamp;
+		ackMessage.updated_at = timestamp;
+		ackMessage.content = [{
+			start_timestamp: timestamp,
+			stop_timestamp: timestamp,
+			type: "text",
+			text: "Acknowledged - end of previous conversation.\n\n" + PHANTOM_MARKER,
+			citations: []
+		}];
+		phantomMessages.push(ackMessage);
 		lastPhantom = ackMessage;
 	}
 
 	console.log(`Injecting ${phantomMessages.length} phantom messages into conversation`);
 
+	// Convert to JSON for injection
+	let phantomJson = phantomMessages.map(msg => msg.toHistoryJSON());
+
+	// Reorder keys to match reference message format
+	if (referenceMsg) {
+		phantomJson = phantomJson.map(msg => reorderKeys(msg, referenceMsg));
+	}
+
+	// Update root messages to point to last phantom
 	const rootMessages = data.chat_messages.filter(
 		msg => msg.parent_message_uuid === "00000000-0000-4000-8000-000000000000"
 	);
@@ -284,12 +268,11 @@ function injectPhantomMessages(data, phantomMessages) {
 		});
 	}
 
-	data.chat_messages = [...phantomMessages, ...data.chat_messages];
+	data.chat_messages = [...phantomJson, ...data.chat_messages];
 	// Set correct index values
 	data.chat_messages.forEach((msg, idx) => {
 		msg.index = idx;
 	});
-
 
 	console.log('Updated chat messages with phantom messages:', data.chat_messages);
 }

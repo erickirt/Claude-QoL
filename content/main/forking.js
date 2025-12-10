@@ -275,30 +275,25 @@ If this is a writing or creative discussion, include sections for characters, pl
 						.filter((_, i) => i % 2 === 0)
 						.map(m => m.content[0].text);
 
-					forkAttachments = summaryTexts.map((text, i) =>
-						ClaudeAttachment.fromText(text, `summary_chunk_${i + 1}.txt`).toApiFormat()
-					);
+					forkAttachments = summaryTexts.map((text, i) => ({
+						text: text,
+						filename: `summary_chunk_${i + 1}.txt`
+					}));
 
 					// Fix parent chains based on whether we have phantoms to carry over
 					if (phantomsToCarryOver.length > 0) {
-						// First carried-over phantom points to last summary message
-						phantomsToCarryOver[0] = {
-							...phantomsToCarryOver[0],
-							parent_message_uuid: summaryMsgs.at(-1).uuid
-						};
+						// First carried-over phantom points to last summary message (modify ClaudeMessage directly)
+						phantomsToCarryOver[0].parent_message_uuid = summaryMsgs.at(-1).uuid;
 
 						if (toKeep.length > 0) {
 							// First toKeep message points to last carried-over phantom
-							toKeep[0] = {
-								...toKeep[0],
-								parent_message_uuid: phantomsToCarryOver.at(-1).uuid
-							};
+							toKeep[0].parent_message_uuid = phantomsToCarryOver.at(-1).uuid;
 
 							forkAttachments.push(getChatlogFromMessages(toKeep, false));
 						}
 					} else if (toKeep.length > 0) {
 						// Original behavior when no phantoms to carry over
-						toKeep[0] = { ...toKeep[0], parent_message_uuid: summaryMsgs.at(-1).uuid };
+						toKeep[0].parent_message_uuid = summaryMsgs.at(-1).uuid;
 						forkAttachments.push(getChatlogFromMessages(toKeep, false));
 					}
 
@@ -317,10 +312,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 
 					// First real message points to last existing phantom
 					if (messages.length > 0) {
-						messages[0] = {
-							...messages[0],
-							parent_message_uuid: existingPhantoms.at(-1).uuid
-						};
+						messages[0].parent_message_uuid = existingPhantoms.at(-1).uuid;
 					}
 					messages = [...existingPhantoms, ...messages];
 				}
@@ -330,25 +322,25 @@ If this is a writing or creative discussion, include sections for characters, pl
 
 			// Clean up messages based on toggles
 			if (!pendingFork.includeAttachments) {
-				messages = messages.map(msg => ({
-					...msg,
-					files_v2: [],
-					files: [],
-					attachments: (msg.attachments || []).filter(att =>
-						att.file_name === 'chatlog.txt' ||
-						att.file_name?.startsWith('chatlog_part') ||
-						att.file_name?.startsWith('summary_chunk_')
-					)
-				}));
+				for (const msg of messages) {
+					// Keep chatlog-related attachments
+					const chatlogFiles = msg.files.filter(f =>
+						f instanceof ClaudeAttachment &&
+						(f.file_name === 'chatlog.txt' ||
+						 f.file_name?.startsWith('chatlog_part') ||
+						 f.file_name?.startsWith('summary_chunk_'))
+					);
+					msg.clearFiles();
+					for (const f of chatlogFiles) {
+						msg.attachFile(f);
+					}
+				}
 			}
 
 			if (!pendingFork.includeToolCalls) {
-				messages = messages.map(msg => ({
-					...msg,
-					content: msg.content.filter(item =>
-						item.type !== 'tool_use' && item.type !== 'tool_result'
-					)
-				}));
+				for (const msg of messages) {
+					msg.removeToolCalls();
+				}
 			}
 
 			const newConversationId = await createFork(
@@ -395,12 +387,12 @@ If this is a writing or creative discussion, include sections for characters, pl
 	async function getConversationMessages(orgId, conversationId, targetUUID) {
 		const conversation = new ClaudeConversation(orgId, conversationId);
 		const conversationData = await conversation.getData(false);
+		const allMessages = await conversation.getMessages(false);
 
-		let messages = [];
-
-		for (const message of conversationData.chat_messages) {
-			messages.push(message); // Keep full message object with all properties
-
+		// Extract up to targetUUID as ClaudeMessage[]
+		const messages = [];
+		for (const message of allMessages) {
+			messages.push(message);
 			if (message.uuid === targetUUID) {
 				break;
 			}
@@ -409,11 +401,12 @@ If this is a writing or creative discussion, include sections for characters, pl
 		return {
 			conversation,      // The ClaudeConversation instance
 			conversationData,  // Raw data with name, projectUuid, etc.
-			messages          // Clean array of message objects
+			messages          // ClaudeMessage[] array
 		};
 	}
 
-	function cleanupMessages(messages) {
+	function cleanupMessages(messages, conversation) {
+		// Takes ClaudeMessage[], creates ClaudeMessage instances for filler messages
 		const cleaned = [...messages];
 
 		// Step 1: Remove synthetic normalization pairs
@@ -431,7 +424,6 @@ If this is a writing or creative discussion, include sections for characters, pl
 					prevMsg.sender === expectedAckSender &&
 					prevText === 'Acknowledged.';
 
-
 				if (hasPrevAck) {
 					cleaned.splice(i - 1, 2);
 					i--;
@@ -443,7 +435,6 @@ If this is a writing or creative discussion, include sections for characters, pl
 			}
 		}
 
-
 		// Step 2: Fix consecutive same-sender messages
 		i = 0;
 		while (i < cleaned.length - 1) {
@@ -451,21 +442,16 @@ If this is a writing or creative discussion, include sections for characters, pl
 			const next = cleaned[i + 1];
 
 			if (current.sender === next.sender) {
-
 				const fillerSender = current.sender === 'human' ? 'assistant' : 'human';
 				const fillerText = fillerSender === 'assistant' ? 'Acknowledged.' : 'Continue.';
 
-				const fillerMessage = {
-					uuid: crypto.randomUUID(),
-					parent_message_uuid: current.uuid,
-					sender: fillerSender,
-					content: [{ type: 'text', text: fillerText }],
-					created_at: current.created_at || new Date().toISOString(),
-					files_v2: [],
-					files: [],
-					attachments: [],
-					sync_sources: []
-				};
+				// Create ClaudeMessage instance for filler
+				const fillerMessage = new ClaudeMessage(conversation);
+				fillerMessage.uuid = crypto.randomUUID();
+				fillerMessage.parent_message_uuid = current.uuid;
+				fillerMessage.sender = fillerSender;
+				fillerMessage.text = fillerText;
+				fillerMessage.created_at = current.created_at || new Date().toISOString();
 
 				// Fix next message's parent to point to filler
 				next.parent_message_uuid = fillerMessage.uuid;
@@ -481,43 +467,33 @@ If this is a writing or creative discussion, include sections for characters, pl
 	}
 
 	function filterMessagesForChatlog(messages, includeFiles, includeToolCalls) {
-		let filtered = messages;
-
-		if (!includeFiles) {
-			filtered = filtered.map(msg => ({
-				...msg,
-				files_v2: [],
-				files: [],
-				attachments: []
-			}));
+		// Use ClaudeMessage methods in-place
+		for (const msg of messages) {
+			if (!includeFiles) {
+				msg.clearFiles();
+			}
+			if (!includeToolCalls) {
+				msg.removeToolCalls();
+			}
 		}
-
-		if (!includeToolCalls) {
-			filtered = filtered.map(msg => ({
-				...msg,
-				content: msg.content.filter(item =>
-					item.type !== 'tool_use' && item.type !== 'tool_result'
-				)
-			}));
-		}
-
-		return filtered;
+		return messages;
 	}
 
-	function getChatlogFromMessages(messages, includeRoleLabels = true) {
-		const cleaned = cleanupMessages(messages);
+	function getChatlogFromMessages(messages, includeRoleLabels = true, conversation = null) {
+		// Create temporary conversation if not provided (for filler messages)
+		const conv = conversation || new ClaudeConversation(getOrgId(), null);
+		const cleaned = cleanupMessages(messages, conv);
 
 		const chatlogText = cleaned.map(msg => {
 			const role = msg.sender === 'human' ? '[User]' : '[Assistant]';
-			const text = formatMessageForChatlog(msg);
+			const text = msg.toChatlogString();
 			return includeRoleLabels ? `${role}\n${text}` : text;
 		}).join('\n\n');
 
+		// Return simple {text, filename} - callers should use addFile() to create proper file type
 		return {
-			extracted_content: chatlogText,
-			file_name: "chatlog.txt",
-			file_size: chatlogText.length,
-			file_type: "text/plain"
+			text: chatlogText,
+			filename: "chatlog.txt"
 		};
 	}
 
@@ -527,7 +503,13 @@ If this is a writing or creative discussion, include sections for characters, pl
 				if (event.data.type === 'PHANTOM_MESSAGES_RESPONSE' &&
 					event.data.conversationId === conversationId) {
 					window.removeEventListener('message', handler);
-					resolve(event.data.messages || []);
+					const messagesJson = event.data.messages || [];
+					// Convert raw JSON to ClaudeMessage instances
+					const conversation = new ClaudeConversation(getOrgId(), conversationId);
+					const messages = messagesJson.map(json =>
+						ClaudeMessage.fromHistoryJSON(conversation, json)
+					);
+					resolve(messages);
 				}
 			};
 
@@ -561,6 +543,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 	}
 
 	async function storePhantomMessagesAndWait(conversationId, messages) {
+		// Takes ClaudeMessage[], serializes via toHistoryJSON() for storage
 		return new Promise((resolve) => {
 			const handler = (event) => {
 				if (event.data.type === 'PHANTOM_MESSAGES_STORED_CONFIRMED' &&
@@ -575,7 +558,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 			window.postMessage({
 				type: 'STORE_PHANTOM_MESSAGES',
 				conversationId,
-				phantomMessages: messages
+				phantomMessages: messages.map(m => m.toHistoryJSON())
 			}, '*');
 		});
 	}
@@ -587,47 +570,33 @@ If this is a writing or creative discussion, include sections for characters, pl
 
 		const conversation = new ClaudeConversation(orgId);
 		const newUuid = await conversation.create(newName, model, projectUuid);
-		await storePhantomMessagesAndWait(newUuid, cleanupMessages(messages));
+		await storePhantomMessagesAndWait(newUuid, cleanupMessages(messages, conversation));
 
-		// Collect files from messages (attachments are serialized into chatlog, not forwarded separately)
-		const allFiles = messages.flatMap(m => m.files_v2 || []);
+		// Build the message to send
+		const forkMessage = new ClaudeMessage(conversation);
+		forkMessage.text = "This conversation is forked from the attached chatlog.txt. Simply say 'Acknowledged' and wait for user input.";
+		forkMessage.sender = 'human';
+		if (model) forkMessage.model = model;
+
+		// Add chatlog/summary attachments (conversation metadata - force inline)
+		for (const att of forkAttachments) {
+			await forkMessage.addFile(att.text, att.filename, true);
+		}
+
+		// Collect and deduplicate files from messages (excludes ClaudeAttachments which are inline)
+		const allFiles = messages.flatMap(m =>
+			m.files.filter(f => !(f instanceof ClaudeAttachment))
+		);
 		const dedupedFiles = deduplicateByFilename(allFiles);
 
-		// Download and re-upload files
-		const uploadResults = await Promise.all(
-			dedupedFiles.map(f => new ClaudeFile(f).reupload(orgId))
-		);
-
-		const finalFiles = uploadResults
-			.filter(r => r instanceof ClaudeFile)
-			.map(r => r.file_uuid);
-
-		// Files that couldn't be uploaded as files get converted to attachments
-		const convertedAttachments = uploadResults
-			.filter(r => r instanceof ClaudeAttachment)
-			.map(r => r.toApiFormat());
-
-		const finalAttachments = [
-			...forkAttachments,
-			...convertedAttachments
-		];
-
-		/*const processedSyncSources = await Promise.all(
-				allSyncSources.map(sync => processSyncSource(orgId, sync))
-			);*/
-
+		// Re-upload files using addFile() which handles all file types
+		for (const f of dedupedFiles) {
+			await forkMessage.addFile(f);
+		}
 
 		// Figure out why we get redirected before the message is visible
 		// Despite waiting for assistant completion. For now, idk. Maybe add a delay? TODO: Test more.
-		await conversation.sendMessageAndWaitForResponse(
-			"This conversation is forked from the attached chatlog.txt. Simply say 'Acknowledged' and wait for user input.",
-			{
-				model: model,
-				attachments: finalAttachments,
-				files: finalFiles,
-				syncSources: []
-			}
-		);
+		await conversation.sendMessageAndWaitForResponse(forkMessage);
 
 		await new Promise(r => setTimeout(r, 5000));
 
@@ -656,13 +625,13 @@ If this is a writing or creative discussion, include sections for characters, pl
 		let totalChars = 0;
 
 		for (const msg of messages) {
-			const text = formatMessageContent(msg);
-			totalChars += text.length;
+			// Use ClaudeConversation.extractMessageText which works with both raw JSON and ClaudeMessage
+			totalChars += ClaudeConversation.extractMessageText(msg).length;
 
-			// Add attachment content
-			if (msg.attachments) {
-				for (const att of msg.attachments) {
-					totalChars += att.extracted_content?.length || 0;
+			// Add attachment content from files getter (ClaudeAttachments have extracted_content)
+			for (const file of msg.files) {
+				if (file instanceof ClaudeAttachment) {
+					totalChars += file.extracted_content?.length || 0;
 				}
 			}
 		}
@@ -708,43 +677,41 @@ If this is a writing or creative discussion, include sections for characters, pl
 		console.log("Generating summary for chunk with", messages.length, "messages");
 		const includeAttachments = pendingFork.includeAttachments && pendingFork.keepFilesFromSummarized;
 
-		// Extract from messages directly
-		const files = messages.flatMap(m => m.files_v2 || []);
-		const attachments = messages.flatMap(m => m.attachments || []);
+		// Extract from messages using files getter with instanceof filters
+		const files = messages.flatMap(m =>
+			m.files.filter(f => f instanceof ClaudeFile || f instanceof ClaudeCodeExecutionFile)
+		);
+		const attachments = messages.flatMap(m =>
+			m.files.filter(f => f instanceof ClaudeAttachment)
+		);
 		const syncSources = messages.flatMap(m => m.sync_sources || []);
 
-		// Build prompt
-		const fullPrompt = buildSummaryPrompt(priorSummaryTexts.length, includeAttachments);
+		// Build message for summary generation
+		const summaryMessage = new ClaudeMessage(tempConversation);
+		summaryMessage.text = buildSummaryPrompt(priorSummaryTexts.length, includeAttachments);
+		summaryMessage.sender = 'human';
 
+		// Add prior summary attachments (conversation metadata - force inline)
+		for (let i = 0; i < priorSummaryTexts.length; i++) {
+			await summaryMessage.addFile(priorSummaryTexts[i], `summary_chunk_${i + 1}.txt`, true);
+		}
 
-		// Download and re-upload files
-		const uploadResults = await Promise.all(
-			files.map(f => new ClaudeFile(f).reupload(tempConversation.orgId))
-		);
+		// Add existing attachments from messages
+		for (const a of attachments) {
+			summaryMessage.attachFile(a);
+		}
 
-		const uploadedFileUuids = uploadResults
-			.filter(r => r instanceof ClaudeFile)
-			.map(r => r.file_uuid);
+		// Add chatlog (conversation metadata - force inline)
+		const chatlogAtt = getChatlogFromMessages(messages, true);
+		await summaryMessage.addFile(chatlogAtt.text, chatlogAtt.filename, true);
 
-		const convertedAtts = uploadResults
-			.filter(r => r instanceof ClaudeAttachment)
-			.map(r => r.toApiFormat());
-
-		// Build attachments array
-		const summaryAttachments = [
-			...priorSummaryTexts.map((text, index) =>
-				ClaudeAttachment.fromText(text, `summary_chunk_${index + 1}.txt`).toApiFormat()
-			),
-			...attachments,
-			...convertedAtts,
-			getChatlogFromMessages(messages, true)
-		];
+		// Re-upload files using addFile()
+		for (const f of files) {
+			await summaryMessage.addFile(f);
+		}
 
 		// Get summary using the passed conversation
-		const assistantMessage = await tempConversation.sendMessageAndWaitForResponse(fullPrompt, {
-			attachments: summaryAttachments,
-			files: uploadedFileUuids,
-		});
+		const assistantMessage = await tempConversation.sendMessageAndWaitForResponse(summaryMessage);
 
 		return ClaudeConversation.extractMessageText(assistantMessage);
 	}
@@ -804,21 +771,27 @@ If this is a writing or creative discussion, include sections for characters, pl
 	}
 
 	// Splits messages with too many attachments into multiple messages
-	function normalizeOversizedMessages(messages) {
+	function normalizeOversizedMessages(messages, conversation = null) {
+		// Create temporary conversation if not provided
+		const conv = conversation || new ClaudeConversation(getOrgId(), null);
 		const normalized = [];
 
 		for (const msg of messages) {
 			const msgTokens = estimateTokens([msg]);
 
-			if (msgTokens <= LAST_CHUNK_SIZE || !msg.attachments?.length) {
+			// Get attachments from files getter
+			const msgAttachments = msg.files.filter(f => f instanceof ClaudeAttachment);
+			const msgNonAttachments = msg.files.filter(f => !(f instanceof ClaudeAttachment));
+
+			if (msgTokens <= LAST_CHUNK_SIZE || !msgAttachments.length) {
 				// Keep as-is: normal size, or can't split further
 				normalized.push(msg);
 				continue;
 			}
 
-			// Pre-split any oversized attachments
-			const processedAttachments = msg.attachments.flatMap(att =>
-				splitOversizedAttachment(att)
+			// Pre-split any oversized attachments (returns raw attachment objects)
+			const processedAttachments = msgAttachments.flatMap(att =>
+				splitOversizedAttachment(att.toApiFormat())
 			);
 
 			// Split attachments into chunks
@@ -867,40 +840,42 @@ If this is a writing or creative discussion, include sections for characters, pl
 			for (let i = 0; i < attachmentChunks.length; i++) {
 				const isLast = i === attachmentChunks.length - 1;
 
-				// Original sender message with attachments
-				const senderUuid = isLast ? msg.uuid : crypto.randomUUID();
-				normalized.push({
-					...msg,
-					uuid: senderUuid,
-					parent_message_uuid: previousUuid,
-					sender: originalSender,
-					attachments: attachmentChunks[i],
-					files_v2: (i === 0) ? msg.files_v2 : [],
-					files: (i === 0) ? msg.files : [],
-					content: (i === 0) ? msg.content : [{
-						type: 'text',
-						text: '[Continued attachments from previous message]'
-					}]
-				});
+				// Create ClaudeMessage for this chunk
+				const chunkMsg = new ClaudeMessage(conv);
+				chunkMsg.uuid = isLast ? msg.uuid : crypto.randomUUID();
+				chunkMsg.parent_message_uuid = previousUuid;
+				chunkMsg.sender = originalSender;
+				chunkMsg.created_at = msg.created_at;
 
-				previousUuid = senderUuid;
+				// First chunk gets original content and non-attachment files
+				if (i === 0) {
+					chunkMsg.content = [...msg.content];
+					for (const f of msgNonAttachments) {
+						chunkMsg.attachFile(f);
+					}
+				} else {
+					chunkMsg.content = [{ type: 'text', text: '[Continued attachments from previous message]' }];
+				}
+
+				// Add this chunk's attachments as ClaudeAttachment instances
+				for (const attJson of attachmentChunks[i]) {
+					chunkMsg.attachFile(ClaudeAttachment.fromJSON(attJson));
+				}
+
+				normalized.push(chunkMsg);
+				previousUuid = chunkMsg.uuid;
 
 				// Add acknowledgment (except after last chunk)
 				if (!isLast) {
-					const ackUuid = crypto.randomUUID();
-					normalized.push({
-						uuid: ackUuid,
-						parent_message_uuid: senderUuid,
-						sender: alternateSender,
-						content: [{ type: 'text', text: 'Acknowledged.' }],
-						files_v2: [],
-						files: [],
-						attachments: [],
-						sync_sources: [],
-						created_at: msg.created_at
-					});
+					const ackMsg = new ClaudeMessage(conv);
+					ackMsg.uuid = crypto.randomUUID();
+					ackMsg.parent_message_uuid = chunkMsg.uuid;
+					ackMsg.sender = alternateSender;
+					ackMsg.text = 'Acknowledged.';
+					ackMsg.created_at = msg.created_at;
 
-					previousUuid = ackUuid;
+					normalized.push(ackMsg);
+					previousUuid = ackMsg.uuid;
 				}
 			}
 
@@ -911,9 +886,13 @@ If this is a writing or creative discussion, include sections for characters, pl
 	}
 
 	async function chunkAndSummarize(orgId, messages) {
-		// Collect ALL files/attachments/toolCalls from entire summarized section upfront
-		const allFiles = messages.flatMap(m => m.files_v2 || []);
-		const allAttachments = messages.flatMap(m => m.attachments || []);
+		// Collect ALL files/attachments/toolCalls from entire summarized section upfront using files getter
+		const allFiles = messages.flatMap(m =>
+			m.files.filter(f => f instanceof ClaudeFile || f instanceof ClaudeCodeExecutionFile)
+		);
+		const allAttachments = messages.flatMap(m =>
+			m.files.filter(f => f instanceof ClaudeAttachment)
+		);
 		const allToolCalls = messages.flatMap(m =>
 			m.content.filter(item => item.type === 'tool_use' || item.type === 'tool_result')
 		);
@@ -942,7 +921,6 @@ If this is a writing or creative discussion, include sections for characters, pl
 
 			for (const chunk of chunks) {
 				processedTokens += estimateTokens(chunk);
-				//console.log(`Processing chunk with ${chunk.length} messages, estimated tokens: ${estimateTokens(chunk)}. Total processed: ${processedTokens - estimateTokens(chunk)}`);
 				const summaryText = await generateSummaryForChunk(
 					tempConversation,
 					chunk,
@@ -961,43 +939,44 @@ If this is a writing or creative discussion, include sections for characters, pl
 			// ===== PHASE 2.5: User review/edit summaries =====
 			const editedSummaryTexts = await showSummaryEditModal(summaryTexts, chunks, tempConversation);
 
-			// ===== PHASE 3: Create synthetic message pairs =====
+			// ===== PHASE 3: Create synthetic ClaudeMessage pairs =====
 			const syntheticMessages = [];
+			const timestamp = new Date().toISOString();
 
 			for (let i = 0; i < editedSummaryTexts.length; i++) {
 				const summaryText = editedSummaryTexts[i];
 				const isFirstPair = i === 0;
 				const isLastPair = i === editedSummaryTexts.length - 1;
 
-				const userUuid = crypto.randomUUID();
-				const assistantUuid = crypto.randomUUID();
 				const parentUuid = syntheticMessages.at(-1)?.uuid ?? "00000000-0000-4000-8000-000000000000";
 
-				const userMessage = {
-					uuid: userUuid,
-					parent_message_uuid: parentUuid,
-					sender: 'human',
-					content: [{ type: 'text', text: summaryText }],
-					files_v2: isFirstPair && pendingFork.includeAttachments && pendingFork.keepFilesFromSummarized ? allFiles : [],
-					files: isFirstPair && pendingFork.includeAttachments && pendingFork.keepFilesFromSummarized ? allFiles.map(f => f.file_uuid) : [],
-					attachments: isFirstPair && pendingFork.includeAttachments && pendingFork.keepFilesFromSummarized ? allAttachments : [],
-					sync_sources: [],
-					created_at: new Date().toISOString(),
-				};
+				// Create user message as ClaudeMessage
+				const userMessage = new ClaudeMessage(tempConversation);
+				userMessage.uuid = crypto.randomUUID();
+				userMessage.parent_message_uuid = parentUuid;
+				userMessage.sender = 'human';
+				userMessage.text = summaryText;
+				userMessage.created_at = timestamp;
 
-				const assistantMessage = {
-					uuid: assistantUuid,
-					parent_message_uuid: userUuid,
-					sender: 'assistant',
-					content: [
-						{ type: 'text', text: 'Acknowledged. I understand the context from the summary and am ready to continue our conversation.' }
-					],
-					files_v2: [],
-					files: [],
-					attachments: [],
-					sync_sources: [],
-					created_at: new Date().toISOString(),
-				};
+				// Add files to first user message only
+				if (isFirstPair && pendingFork.includeAttachments && pendingFork.keepFilesFromSummarized) {
+					for (const f of allFiles) {
+						userMessage.attachFile(f);
+					}
+					for (const a of allAttachments) {
+						userMessage.attachFile(a);
+					}
+				}
+
+				// Create assistant message as ClaudeMessage
+				const assistantMessage = new ClaudeMessage(tempConversation);
+				assistantMessage.uuid = crypto.randomUUID();
+				assistantMessage.parent_message_uuid = userMessage.uuid;
+				assistantMessage.sender = 'assistant';
+				assistantMessage.content = [
+					{ type: 'text', text: 'Acknowledged. I understand the context from the summary and am ready to continue our conversation.' }
+				];
+				assistantMessage.created_at = timestamp;
 
 				if (isLastPair && pendingFork.includeToolCalls && pendingFork.keepToolCallsFromSummarized) {
 					assistantMessage.content.push(...allToolCalls);
@@ -1006,7 +985,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 				syntheticMessages.push(userMessage, assistantMessage);
 			}
 
-			console.log('Generated synthetic summary messages:', JSON.stringify(syntheticMessages));
+			console.log('Generated synthetic summary messages:', syntheticMessages.map(m => m.toHistoryJSON()));
 			return syntheticMessages;
 		} finally {
 			await tempConversation.delete();
@@ -1201,25 +1180,17 @@ If this is a writing or creative discussion, include sections for characters, pl
 					// Get chunk for current summary
 					const chunk = chunks[currentIndex];
 
-					// Collect files from chunk
-					const files = chunk.flatMap(m => m.files_v2 || []);
-					const attachments = chunk.flatMap(m => m.attachments || []);
-
-					// Download and re-upload files
-					const uploadResults = await Promise.all(
-						files.map(f => new ClaudeFile(f).reupload(tempConversation.orgId))
+					// Collect files from chunk using unified files getter
+					const files = chunk.flatMap(m =>
+						m.files.filter(f => f instanceof ClaudeFile || f instanceof ClaudeCodeExecutionFile)
+					);
+					const attachments = chunk.flatMap(m =>
+						m.files.filter(f => f instanceof ClaudeAttachment)
 					);
 
-					const uploadedFileUuids = uploadResults
-						.filter(r => r instanceof ClaudeFile)
-						.map(r => r.file_uuid);
-
-					const convertedAtts = uploadResults
-						.filter(r => r instanceof ClaudeAttachment)
-						.map(r => r.toApiFormat());
-
-					// Build prompt
-					const prompt = `\`\`\`
+					// Build message for rewrite
+					const rewriteMessage = new ClaudeMessage(tempConversation);
+					rewriteMessage.text = `\`\`\`
 ${currentSummary}
 \`\`\`
 
@@ -1230,19 +1201,28 @@ ${editPrompt}
 \`\`\`
 
 Provide the complete rewritten summary.`;
+					rewriteMessage.sender = 'human';
 
-					// All attachments
-					const allAttachments = [
-						...previousSummaryAttachments,
-						...attachments,
-						...convertedAtts,
-						getChatlogFromMessages(chunk, true)
-					];
+					// Add previous summary attachments (conversation metadata - force inline)
+					for (const att of previousSummaryAttachments) {
+						await rewriteMessage.addFile(att.extracted_content, att.file_name, true);
+					}
 
-					const assistantMessage = await tempConversation.sendMessageAndWaitForResponse(prompt, {
-						attachments: allAttachments,
-						files: uploadedFileUuids,
-					});
+					// Add attachments from chunk
+					for (const a of attachments) {
+						rewriteMessage.attachFile(a);
+					}
+
+					// Add chatlog (conversation metadata - force inline)
+					const chatlogAtt = getChatlogFromMessages(chunk, true);
+					await rewriteMessage.addFile(chatlogAtt.text, chatlogAtt.filename, true);
+
+					// Re-upload files using addFile()
+					for (const f of files) {
+						await rewriteMessage.addFile(f);
+					}
+
+					const assistantMessage = await tempConversation.sendMessageAndWaitForResponse(rewriteMessage);
 
 					const newSummary = ClaudeConversation.extractMessageText(assistantMessage);
 					textareas[currentIndex].value = newSummary;
