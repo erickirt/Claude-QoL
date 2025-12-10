@@ -17,9 +17,13 @@
 
 	//#region Edit Button Interception
 	function addAdvancedEditButtons() {
+		// This is here rather than claude-styles because... no good reason.
+		// TODO: Move it. Make it generic like the other one.
 		const { userMessages } = getUIMessages();
+		console.log('Adding advanced edit buttons to user messages:', userMessages);
 		userMessages.forEach(messageEl => {
 			const controlsContainer = findMessageControls(messageEl);
+			console.log('Found controls container:', controlsContainer);
 			if (!controlsContainer) return;
 
 			// Check if we already added our button
@@ -32,6 +36,7 @@
 
 			for (const button of allButtons) {
 				const svgPath = button.querySelector('svg path');
+				console.log('Checking button SVG path:', svgPath);
 				if (svgPath && svgPath.getAttribute('d')?.startsWith('M9.72821 2.87934')) {
 					editButton = button;
 					editButtonWrapper = button.closest('div.w-fit');

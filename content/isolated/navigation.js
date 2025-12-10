@@ -631,7 +631,7 @@
 		// Add navigation button to top right
 		setInterval(() => {
 			tryAddTopRightButton("navigation-button", createNavigationButton, 'Navigation');
-			addMessageButtonWithPriority(createBookmarkButton, 'bookmark-button');
+			addAssistantMessageButtonWithPriority(createBookmarkButton, 'bookmark-button');
 		}, 1000);
 
 		setInterval(addUserNavigationButtons, 1000);

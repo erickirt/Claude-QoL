@@ -189,7 +189,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 
 	function addBranchButtons() {
 		try {
-			addMessageButtonWithPriority(createBranchButton, 'fork-button');
+			addAssistantMessageButtonWithPriority(createBranchButton, 'fork-button');
 		} catch (error) {
 			console.error('Error adding branch buttons:', error);
 		}
@@ -327,8 +327,8 @@ If this is a writing or creative discussion, include sections for characters, pl
 					const chatlogFiles = msg.files.filter(f =>
 						f instanceof ClaudeAttachment &&
 						(f.file_name === 'chatlog.txt' ||
-						 f.file_name?.startsWith('chatlog_part') ||
-						 f.file_name?.startsWith('summary_chunk_'))
+							f.file_name?.startsWith('chatlog_part') ||
+							f.file_name?.startsWith('summary_chunk_'))
 					);
 					msg.clearFiles();
 					for (const f of chatlogFiles) {

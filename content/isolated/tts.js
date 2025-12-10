@@ -442,7 +442,7 @@
 	async function addSpeakButtons() {
 		const settings = await loadSettings();
 		if (!settings.enabled) return;
-		addMessageButtonWithPriority(createSpeakButton, 'tts-speak-button');
+		addAssistantMessageButtonWithPriority(createSpeakButton, 'tts-speak-button');
 
 		// Handle artifact buttons
 		const buttonsRow = findArtifactButtonsRow();

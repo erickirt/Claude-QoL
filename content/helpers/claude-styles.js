@@ -1037,13 +1037,13 @@ function findMessageControls(messageElement) {
 
 	if (isUserMessage) {
 		// User message logic
-		const groupEl = messageElement.closest('.group');
+		const groupEl = messageElement.closest('.group')?.parentElement;
 		if (!groupEl) return null;
 
-		return groupEl.querySelector('.absolute.bottom-0.right-2');
+		return groupEl.querySelector('.justify-between');
 	} else {
 		// Assistant message logic (original code)
-		const group = messageElement.closest('.group');
+		const group = messageElement.closest('.group')?.parentElement;
 		const buttons = group?.querySelectorAll('button');
 		if (!buttons) return null;
 		const copyButton = group.querySelector('[data-testid="action-bar-copy"]');
@@ -1062,7 +1062,7 @@ function getUIMessages() {
 	};
 }
 
-function addMessageButtonWithPriority(buttonGenerator, buttonClass) {
+function addAssistantMessageButtonWithPriority(buttonGenerator, buttonClass) {
 	const MESSAGE_BUTTON_PRIORITY = [
 		'tts-speak-button',
 		'fork-button',
