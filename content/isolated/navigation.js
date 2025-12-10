@@ -527,20 +527,19 @@
 	// #region MESSAGE BOOKMARK
 	function createBookmarkButton() {
 		const svgContent = `
-        <div class="flex items-center justify-center" style="width: 16px; height: 16px;">
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0" aria-hidden="true">
-                <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
-            </svg>
-        </div>
-    `;
+		<div class="relative text-text-500 group-hover/btn:text-text-100">
+			<div class="flex items-center justify-center transition-all" style="width: 20px; height: 20px;">
+				<svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor" xmlns="http://www.w3.org/2000/svg" class="shrink-0" aria-hidden="true">
+					<path d="M5 3.5C5 2.67157 5.67157 2 6.5 2H13.5C14.3284 2 15 2.67157 15 3.5V17.5C15 17.6894 14.8909 17.8625 14.7211 17.9472C14.5513 18.0319 14.3483 18.0136 14.1963 17.9L10 14.6289L5.80371 17.9C5.65171 18.0136 5.44866 18.0319 5.27886 17.9472C5.10906 17.8625 5 17.6894 5 17.5V3.5ZM6.5 3C6.22386 3 6 3.22386 6 3.5V16.4198L9.69629 13.6C9.87278 13.4667 10.1272 13.4667 10.3037 13.6L14 16.4198V3.5C14 3.22386 13.7761 3 13.5 3H6.5Z"/>
+				</svg>
+			</div>
+		</div>
+	`;
 
-		const button = createClaudeButton(svgContent, 'icon');
+		const button = createClaudeButton(svgContent, 'icon-message');
 		button.type = 'button';
 		button.setAttribute('data-state', 'closed');
 		button.setAttribute('aria-label', 'Bookmark this message');
-
-		button.classList.remove('h-9', 'w-9');
-		button.classList.add('h-8', 'w-8');
 
 		createClaudeTooltip(button, 'Bookmark this message');
 
@@ -548,7 +547,6 @@
 			e.preventDefault();
 			e.stopPropagation();
 
-			// Get the message UUID from the message element
 			const messageContainer = e.target.closest('[data-message-uuid]');
 			const messageUuid = messageContainer?.dataset.messageUuid;
 

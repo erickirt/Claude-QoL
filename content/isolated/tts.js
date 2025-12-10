@@ -250,7 +250,7 @@
 
 	//#region Message Buttons
 	function createSpeakButton() {
-		const button = createClaudeButton(SPEAKER_ICON, 'icon', async (e) => {
+		const button = createClaudeButton(SPEAKER_ICON, 'icon-message', async (e) => {
 			e.preventDefault();
 			e.stopPropagation();
 

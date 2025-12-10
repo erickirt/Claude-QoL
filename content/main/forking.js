@@ -21,20 +21,19 @@ If this is a writing or creative discussion, include sections for characters, pl
 	//#region UI elements creation
 	function createBranchButton() {
 		const svgContent = `
-        <div class="flex items-center justify-center" style="width: 16px; height: 16px;">
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" viewBox="0 0 22 22" class="shrink-0" aria-hidden="true">
-                <path d="M7 5C7 3.89543 7.89543 3 9 3C10.1046 3 11 3.89543 11 5C11 5.74028 10.5978 6.38663 10 6.73244V14.0396H11.7915C12.8961 14.0396 13.7915 13.1441 13.7915 12.0396V10.7838C13.1823 10.4411 12.7708 9.78837 12.7708 9.03955C12.7708 7.93498 13.6662 7.03955 14.7708 7.03955C15.8753 7.03955 16.7708 7.93498 16.7708 9.03955C16.7708 9.77123 16.3778 10.4111 15.7915 10.7598V12.0396C15.7915 14.2487 14.0006 16.0396 11.7915 16.0396H10V17.2676C10.5978 17.6134 11 18.2597 11 19C11 20.1046 10.1046 21 9 21C7.89543 21 7 20.1046 7 19C7 18.2597 7.4022 17.6134 8 17.2676V6.73244C7.4022 6.38663 7 5.74028 7 5Z"/>
-            </svg>
-        </div>
-    `;
+		<div class="relative text-text-500 group-hover/btn:text-text-100">
+			<div class="flex items-center justify-center transition-all" style="width: 20px; height: 20px;">
+				<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" viewBox="0 0 22 22" class="shrink-0" aria-hidden="true">
+					<path d="M7 5C7 3.89543 7.89543 3 9 3C10.1046 3 11 3.89543 11 5C11 5.74028 10.5978 6.38663 10 6.73244V14.0396H11.7915C12.8961 14.0396 13.7915 13.1441 13.7915 12.0396V10.7838C13.1823 10.4411 12.7708 9.78837 12.7708 9.03955C12.7708 7.93498 13.6662 7.03955 14.7708 7.03955C15.8753 7.03955 16.7708 7.93498 16.7708 9.03955C16.7708 9.77123 16.3778 10.4111 15.7915 10.7598V12.0396C15.7915 14.2487 14.0006 16.0396 11.7915 16.0396H10V17.2676C10.5978 17.6134 11 18.2597 11 19C11 20.1046 10.1046 21 9 21C7.89543 21 7 20.1046 7 19C7 18.2597 7.4022 17.6134 8 17.2676V6.73244C7.4022 6.38663 7 5.74028 7 5Z"/>
+				</svg>
+			</div>
+		</div>
+	`;
 
-		const button = createClaudeButton(svgContent, 'icon');
+		const button = createClaudeButton(svgContent, 'icon-message');
 		button.type = 'button';
 		button.setAttribute('data-state', 'closed');
 		button.setAttribute('aria-label', 'Fork from here');
-
-		button.classList.remove('h-9', 'w-9');
-		button.classList.add('h-8', 'w-8');
 
 		createClaudeTooltip(button, 'Fork from here');
 
@@ -42,7 +41,6 @@ If this is a writing or creative discussion, include sections for characters, pl
 			e.preventDefault();
 			e.stopPropagation();
 
-			// Get message UUID directly from DOM
 			const messageContainer = e.target.closest('[data-message-uuid]');
 			const messageUuid = messageContainer?.dataset.messageUuid;
 

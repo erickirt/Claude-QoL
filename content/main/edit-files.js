@@ -20,10 +20,8 @@
 		// This is here rather than claude-styles because... no good reason.
 		// TODO: Move it. Make it generic like the other one.
 		const { userMessages } = getUIMessages();
-		console.log('Adding advanced edit buttons to user messages:', userMessages);
 		userMessages.forEach(messageEl => {
 			const controlsContainer = findMessageControls(messageEl);
-			console.log('Found controls container:', controlsContainer);
 			if (!controlsContainer) return;
 
 			// Check if we already added our button
@@ -57,7 +55,7 @@
             </div>
         `;
 
-			const advancedEditBtn = createClaudeButton(svgContent, 'icon');
+			const advancedEditBtn = createClaudeButton(svgContent, 'icon-message');
 			advancedEditBtn.type = 'button';
 			advancedEditBtn.setAttribute('data-state', 'closed');
 			advancedEditBtn.setAttribute('aria-label', 'Advanced Edit');

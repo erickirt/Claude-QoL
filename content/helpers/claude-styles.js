@@ -8,6 +8,7 @@ document.documentElement.setAttribute('data-claude-qol-installed', 'true');
 const CLAUDE_CLASSES = {
 	// Buttons
 	ICON_BTN: 'inline-flex items-center justify-center relative shrink-0 ring-offset-2 ring-offset-bg-300 ring-accent-main-100 focus-visible:outline-none focus-visible:ring-1 disabled:pointer-events-none disabled:opacity-50 disabled:shadow-none disabled:drop-shadow-none text-text-200 border-transparent transition-colors font-styrene active:bg-bg-400 h-9 w-9 rounded-md active:scale-95',
+	ICON_BTN_MSG: 'inline-flex items-center justify-center relative shrink-0 can-focus select-none disabled:pointer-events-none disabled:opacity-50 disabled:shadow-none disabled:drop-shadow-none border-transparent transition font-base duration-300 ease-[cubic-bezier(0.165,0.85,0.45,1)] h-8 w-8 rounded-md active:scale-95 group/btn',
 	BTN_PRIMARY: 'inline-flex items-center justify-center px-4 py-2 font-base-bold bg-text-000 text-bg-000 rounded hover:bg-text-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors min-w-[5rem] h-9',
 	BTN_SECONDARY: 'inline-flex items-center justify-center px-4 py-2 hover:bg-bg-500/40 rounded transition-colors min-w-[5rem] h-9 text-text-000 font-base-bold border-0.5 border-border-200',
 
@@ -378,9 +379,13 @@ function createClaudeButton(content, variant = 'primary', onClick = null, conten
 		case 'secondary':
 			button.className = CLAUDE_CLASSES.BTN_SECONDARY;
 			break;
-		case 'icon':
-			button.className = CLAUDE_CLASSES.ICON_BTN;
-			contentIsHTML = true; // Always use innerHTML for icon variant
+		case 'icon': case 'icon-message':
+			if (variant === 'icon') {
+				button.className = CLAUDE_CLASSES.ICON_BTN;
+			} else {
+				button.className = CLAUDE_CLASSES.ICON_BTN_MSG;
+			}
+			contentIsHTML = true;
 
 			// Add hover effect directly
 			button.addEventListener('mouseenter', () => {

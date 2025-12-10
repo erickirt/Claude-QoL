@@ -355,7 +355,6 @@ function removePhantomMarkerFromElement(element) {
 // Add new function to extract and store UUIDs
 function extractAndStoreUUIDs() {
 	const { allMessages } = getUIMessages();
-
 	allMessages.forEach(container => {
 		const textContent = container.textContent || '';
 
@@ -369,7 +368,7 @@ function extractAndStoreUUIDs() {
 				const uuid = textContent.substring(uuidStart, uuidEnd);
 
 				// Put UUID on parent container instead of the message element itself
-				const parentContainer = container?.parentElement;
+				const parentContainer = container?.parentElement?.parentElement;
 				if (parentContainer) {
 					parentContainer.setAttribute('data-message-uuid', uuid);
 				}
