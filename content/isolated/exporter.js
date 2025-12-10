@@ -66,6 +66,33 @@
 		return output;
 	}
 
+	function formatMdExport(conversationData, messages, conversationId) {
+		let output = `# ${conversationData.name}\n\n`;
+
+		for (const message of messages) {
+			const role = message.sender === ROLES.USER.apiName ? 'User' : 'Assistant';
+			output += `### ${role}\n\n`;
+
+			for (const content of message.content) {
+				if (content.type === 'thinking') {
+					// Use last summary if available, fallback to "Thinking"
+					let summaryText = 'Thinking';
+					if (content.summaries && content.summaries.length > 0) {
+						summaryText = content.summaries[content.summaries.length - 1].summary;
+					}
+					output += `<details>\n<summary>${summaryText}</summary>\n\n${content.thinking}\n\n</details>\n\n<br>\n\n`;
+				} else if (content.type === 'text') {
+					output += `${content.text}\n\n`;
+				}
+				// Skip all other content types (tool_use, tool_result, etc.)
+			}
+
+			output += `---\n\n`;
+		}
+
+		return output;
+	}
+
 	function formatJsonlExport(conversationData, messages, conversationId) {
 		// Simple JSONL - just role and text
 		return messages.map(msg => {
@@ -240,6 +267,8 @@
 		switch (format) {
 			case 'txt':
 				return formatTxtExport(conversationData, messages, conversationId);
+			case 'md':
+				return formatMdExport(conversationData, messages, conversationId);
 			case 'jsonl':
 				return formatJsonlExport(conversationData, messages, conversationId);
 			case 'librechat':
@@ -1145,6 +1174,7 @@
 			// Format select
 			formatSelect = createClaudeSelect([
 				{ value: 'txt_txt', label: 'Text (.txt)' },
+				{ value: 'md_md', label: 'Markdown (.md)' },
 				{ value: 'zip_zip', label: 'Zip (.zip)' },
 				{ value: 'jsonl_jsonl', label: 'JSONL (.jsonl)' },
 				{ value: 'librechat_json', label: 'Librechat (.json)' },
