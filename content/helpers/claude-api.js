@@ -534,18 +534,6 @@ class ClaudeCodeExecutionFile {
 	}
 }
 
-class DownloadedFile {
-	constructor({ originalUuid, blob, fileName }) {
-		this.originalUuid = originalUuid;
-		this.blob = blob;
-		this.fileName = fileName;
-	}
-
-	async upload(orgId) {
-		return ClaudeFile.upload(orgId, this.blob, this.fileName);
-	}
-}
-
 // Unified file parsing - takes API data and returns appropriate class
 function parseFileFromAPI(apiData, conversation = null) {
 	// Code execution file - has path property
@@ -819,7 +807,7 @@ class ClaudeMessage {
 			updated_at: this.updated_at,
 			truncated: this.truncated,
 			attachments,
-			files,
+			files: files_v2,
 			files_v2,
 			sync_sources: this.sync_sources,
 			parent_message_uuid: this.parent_message_uuid
