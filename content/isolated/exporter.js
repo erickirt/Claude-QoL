@@ -291,7 +291,7 @@
 			text.textContent = `Failed to get "${fileName}" from zip. Please select it from your computer:`;
 			content.appendChild(text);
 
-			const modal = new ClaudeModal('File Missing', content);
+			const modal = new ClaudeModal('File Missing', content, false);
 
 			modal.addCancel('Skip File', () => {
 				resolve(null);

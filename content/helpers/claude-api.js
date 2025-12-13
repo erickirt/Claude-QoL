@@ -144,7 +144,7 @@ class ClaudeConversation {
 		let blob, name;
 
 		if (fileOrAttachmentOrBlob instanceof ClaudeFile) {
-			blob = await fileOrAttachmentOrBlob.download();
+			const downloadedBlob = await fileOrAttachmentOrBlob.download();
 			name = fileName ?? fileOrAttachmentOrBlob.file_name;
 		} else if (fileOrAttachmentOrBlob instanceof ClaudeAttachment) {
 			blob = new Blob([fileOrAttachmentOrBlob.extracted_content], { type: 'text/plain' });
@@ -154,6 +154,14 @@ class ClaudeConversation {
 			name = fileName ?? 'unnamed';
 		} else {
 			throw new Error('Expected ClaudeFile, ClaudeAttachment, or Blob');
+		}
+
+		// Ensure correct MIME type (for ClaudeFile and raw Blob cases)
+		if (!blob || !blob.type || blob.type === 'application/octet-stream') {
+			const ext = name.toLowerCase().split('.').pop();
+			const mimeType = MIME_TYPES[ext] || blob?.type || 'application/octet-stream';
+			const sourceBlob = blob ?? await fileOrAttachmentOrBlob.download();
+			blob = new Blob([sourceBlob], { type: mimeType });
 		}
 
 		const formData = new FormData();
@@ -329,6 +337,7 @@ class ClaudeFile {
 		this.thumbnail_asset = apiData.thumbnail_asset || null;
 		this.preview_url = apiData.preview_url || null;
 		this.thumbnail_url = apiData.thumbnail_url || null;
+		this.raw_data = apiData; // Store raw data for reference
 	}
 
 	getDownloadUrl() {
@@ -472,7 +481,7 @@ class ClaudeAttachment {
 }
 
 class ClaudeCodeExecutionFile {
-	constructor(apiData, orgId, conversationId) {	// orgId and conversationId needed period
+	constructor(apiData, orgId, conversationId) {
 		this.file_uuid = apiData.file_uuid;
 		this.file_name = apiData.file_name;
 		this.sanitized_name = apiData.sanitized_name;
@@ -480,6 +489,13 @@ class ClaudeCodeExecutionFile {
 		this.size_bytes = apiData.size_bytes;
 		this.file_kind = apiData.file_kind;
 		this.created_at = apiData.created_at;
+
+		// Asset properties (same as ClaudeFile)
+		this.preview_asset = apiData.preview_asset || null;
+		this.document_asset = apiData.document_asset || null;
+		this.thumbnail_asset = apiData.thumbnail_asset || null;
+		this.preview_url = apiData.preview_url || null;
+		this.thumbnail_url = apiData.thumbnail_url || null;
 
 		// Stored for download
 		this.orgId = orgId;
@@ -491,10 +507,29 @@ class ClaudeCodeExecutionFile {
 	}
 
 	getDownloadUrl() {
-		if (!this.orgId || !this.conversationId || !this.path) {
-			return null;
+		// Prefer wiggle endpoint for code execution files
+		if (this.orgId && this.conversationId && this.path) {
+			return `/api/organizations/${this.orgId}/conversations/${this.conversationId}/wiggle/download-file?path=${encodeURIComponent(this.path)}`;
 		}
-		return `/api/organizations/${this.orgId}/conversations/${this.conversationId}/wiggle/download-file?path=${encodeURIComponent(this.path)}`;
+
+		// Fall back to asset URLs
+		if (this.preview_asset?.url) {
+			return this.preview_asset.url;
+		}
+		if (this.document_asset?.url) {
+			return this.document_asset.url;
+		}
+		if (this.preview_url) {
+			return this.preview_url;
+		}
+		if (this.thumbnail_asset?.url) {
+			return this.thumbnail_asset.url;
+		}
+		if (this.thumbnail_url) {
+			return this.thumbnail_url;
+		}
+
+		return null;
 	}
 
 	async download() {
@@ -525,7 +560,12 @@ class ClaudeCodeExecutionFile {
 			path: this.path,
 			size_bytes: this.size_bytes,
 			file_kind: this.file_kind,
-			created_at: this.created_at
+			created_at: this.created_at,
+			preview_asset: this.preview_asset,
+			document_asset: this.document_asset,
+			thumbnail_asset: this.thumbnail_asset,
+			preview_url: this.preview_url,
+			thumbnail_url: this.thumbnail_url
 		};
 	}
 
@@ -757,7 +797,8 @@ class ClaudeMessage {
 	_getFilesJSON() {
 		const ATTACHMENT_CHAR_LIMIT = 15000;
 		const files_v2 = [];
-		const files = [];
+		const files_completion = [];
+		const files_history = [];
 		const attachments = [];
 
 		for (const f of this._files) {
@@ -781,25 +822,38 @@ class ClaudeMessage {
 					});
 				} else {
 					// Large files or non-text: include in files array
-					files_v2.push(f.toApiFormat());
-					files.push(f.file_uuid);
+					const apiFormat = f.toApiFormat();
+					files_v2.push(apiFormat);
+					files_completion.push(f.file_uuid);
+
+					// Images go in files_history
+					if (f.file_kind === 'image') {
+						files_history.push(apiFormat);
+					}
 				}
 			} else {
 				// ClaudeFile
-				files_v2.push(f.toApiFormat());
-				files.push(f.file_uuid);
+				const apiFormat = f.toApiFormat();
+				files_v2.push(apiFormat);
+				files_completion.push(f.file_uuid);
+
+				// Only images go in files_history
+				if (f.file_kind === 'image') {
+					files_history.push(apiFormat);
+				}
 			}
 		}
 
-		return { files_v2, files, attachments };
+		return { files_v2, files_completion, files_history, attachments };
 	}
 
+	// toHistoryJSON - use files_history
 	toHistoryJSON() {
-		const { files_v2, files, attachments } = this._getFilesJSON();
+		const { files_v2, files_history, attachments } = this._getFilesJSON();
 
 		return {
 			uuid: this.uuid,
-			text: this.text,  // Derived from content via getter
+			text: this.text,
 			content: this.content,
 			sender: this.sender,
 			index: this.index,
@@ -807,7 +861,7 @@ class ClaudeMessage {
 			updated_at: this.updated_at,
 			truncated: this.truncated,
 			attachments,
-			files: files_v2,
+			files: files_history,
 			files_v2,
 			sync_sources: this.sync_sources,
 			parent_message_uuid: this.parent_message_uuid
@@ -829,7 +883,7 @@ class ClaudeMessage {
 			throw new Error('Cannot send message with multiple text blocks as completion');
 		}
 
-		const { files, attachments } = this._getFilesJSON();
+		const { files_completion, attachments } = this._getFilesJSON();
 
 		return {
 			prompt: textBlocks[0].text,
@@ -840,7 +894,7 @@ class ClaudeMessage {
 			model: this.model,
 			tools: this.tools,
 			attachments,
-			files,
+			files: files_completion,
 			sync_sources: this.sync_sources,
 			rendering_mode: this.rendering_mode
 		};
@@ -861,10 +915,14 @@ class ClaudeMessage {
 			}
 		}
 
-		// Dump files as JSON
-		const { files_v2, attachments } = this._getFilesJSON();
-		if (files_v2.length > 0) parts.push(JSON.stringify(files_v2));
-		if (attachments.length > 0) parts.push(JSON.stringify(attachments));
+		// Format files
+		for (const f of this._files) {
+			if (f instanceof ClaudeAttachment) {
+				parts.push(`<${f.file_name}>\n${f.extracted_content}\n</${f.file_name}>`);
+			} else {
+				parts.push(`[File: ${f.file_name} (${f.file_kind})]`);
+			}
+		}
 
 		return parts.join('\n\n');
 	}

@@ -34,7 +34,6 @@
 
 			for (const button of allButtons) {
 				const svgPath = button.querySelector('svg path');
-				console.log('Checking button SVG path:', svgPath);
 				if (svgPath && svgPath.getAttribute('d')?.startsWith('M9.72821 2.87934')) {
 					editButton = button;
 					editButtonWrapper = button.closest('div.w-fit');
