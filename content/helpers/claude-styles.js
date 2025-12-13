@@ -1058,12 +1058,22 @@ function findMessageControls(messageElement) {
 
 // Retrieve all message elements from the UI
 function getUIMessages() {
-	const assistantMessages = document.querySelectorAll('.font-claude-response, .\\!font-claude-response');
-	const userMessages = document.querySelectorAll('.font-user-message, .\\!font-user-message, [data-testid="user-message"]');
+	const assistantMessages = Array.from(document.querySelectorAll('.font-claude-response, .\\!font-claude-response'))
+		.filter(el => !el.classList.contains('text-text-300'));
+	const userMessages = Array.from(document.querySelectorAll('.font-user-message, .\\!font-user-message, [data-testid="user-message"]'));
+
+	// Interleave messages: user, assistant, user, assistant...
+	const allMessages = [];
+	const maxLen = Math.max(userMessages.length, assistantMessages.length);
+	for (let i = 0; i < maxLen; i++) {
+		if (i < userMessages.length) allMessages.push(userMessages[i]);
+		if (i < assistantMessages.length) allMessages.push(assistantMessages[i]);
+	}
+
 	return {
 		assistantMessages,
 		userMessages,
-		allMessages: [...assistantMessages, ...userMessages]
+		allMessages
 	};
 }
 

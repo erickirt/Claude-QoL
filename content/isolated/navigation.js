@@ -84,7 +84,10 @@
 		nameDiv.className = 'flex-1 text-sm text-text-100 cursor-pointer';
 		nameDiv.textContent = name;
 		nameDiv.onclick = async () => {
+			const loadingModal = createLoadingModal('Navigating to bookmark...');
 			try {
+				loadingModal.show();
+
 				// Navigate to the bookmarked leaf
 				const longestLeaf = conversation.findLongestLeaf(bookmarkUuid);
 				await conversation.setCurrentLeaf(longestLeaf.leafId);
@@ -93,8 +96,10 @@
 			} catch (error) {
 				console.error('Navigation failed:', error);
 				showClaudeAlert('Navigation Error', 'Failed to navigate. The bookmark may be invalid.');
+				loadingModal.destroy();
 			}
 		};
+
 		item.appendChild(nameDiv);
 
 		// Delete button
@@ -222,7 +227,10 @@
 
 			// Click handler
 			item.onclick = async () => {
+				const loadingModal = createLoadingModal('Navigating to bookmark...');
 				try {
+					loadingModal.show();
+
 					const longestLeaf = conversation.findLongestLeaf(bookmark.uuid);
 					await conversation.setCurrentLeaf(longestLeaf.leafId);
 					sessionStorage.setItem('message_uuid_to_find', bookmark.uuid);
@@ -230,6 +238,7 @@
 				} catch (error) {
 					console.error('Navigation failed:', error);
 					showClaudeAlert('Navigation Error', 'Failed to navigate. The bookmark may be invalid.');
+					loadingModal.destroy();
 				}
 			};
 

@@ -82,6 +82,7 @@
 					prev_message_role: prevMessage ? prevMessage.sender : null,
 					next_message_text: nextMessage ? ClaudeConversation.extractMessageText(nextMessage) : null,
 					next_message_role: nextMessage ? nextMessage.sender : null,
+					next_message_id: nextMessage ? nextMessage.uuid : null,
 					matched_message_id: message.uuid,
 					role: message.sender,
 					position: position,
@@ -100,7 +101,9 @@
 
 		// Scrollable messages container
 		const messagesContainer = document.createElement('div');
-		messagesContainer.className = 'space-y-4 max-h-[60vh] overflow-y-auto pr-2';
+		messagesContainer.className = 'space-y-4 pr-2';
+		messagesContainer.style.maxHeight = '60vh';
+		messagesContainer.style.overflowY = 'auto';
 
 		// Helper to create a message block
 		function createMessageBlock(text, role, label, isMatched = false) {
@@ -141,39 +144,52 @@
 			return block;
 		}
 
-		// Add previous message
-		if (result.prev_message_text) {
-			const prevBlock = createMessageBlock(
-				result.prev_message_text,
-				result.prev_message_role,
-				'Previous Message',
-				false
-			);
-			if (prevBlock) messagesContainer.appendChild(prevBlock);
-		}
-
-		// Add matched message
+		// Position text for matched message label
 		const positionText = result.is_branched
 			? `Branched ${result.position} ${result.position > 1 ? "messages" : "message"} ago`
 			: `${result.position} ${result.position > 1 ? "messages" : "message"} ago`;
 
-		const matchedBlock = createMessageBlock(
-			result.full_message_text,
-			result.role,
-			`Matched Message (${positionText})`,
-			true
-		);
-		if (matchedBlock) messagesContainer.appendChild(matchedBlock);
+		let matchedBlock = null;
 
-		// Add next message
-		if (result.next_message_text) {
-			const nextBlock = createMessageBlock(
-				result.next_message_text,
-				result.next_message_role,
-				'Next Message',
-				false
+		// Show context based on message role
+		if (result.role === 'human') {
+			// Human message: show matched + next (assistant response)
+			matchedBlock = createMessageBlock(
+				result.full_message_text,
+				result.role,
+				`Matched Message (${positionText})`,
+				true
 			);
-			if (nextBlock) messagesContainer.appendChild(nextBlock);
+			if (matchedBlock) messagesContainer.appendChild(matchedBlock);
+
+			if (result.next_message_text) {
+				const nextBlock = createMessageBlock(
+					result.next_message_text,
+					result.next_message_role,
+					'Response',
+					false
+				);
+				if (nextBlock) messagesContainer.appendChild(nextBlock);
+			}
+		} else {
+			// Assistant message: show prev (human question) + matched
+			if (result.prev_message_text) {
+				const prevBlock = createMessageBlock(
+					result.prev_message_text,
+					result.prev_message_role,
+					'Question',
+					false
+				);
+				if (prevBlock) messagesContainer.appendChild(prevBlock);
+			}
+
+			matchedBlock = createMessageBlock(
+				result.full_message_text,
+				result.role,
+				`Matched Message (${positionText})`,
+				true
+			);
+			if (matchedBlock) messagesContainer.appendChild(matchedBlock);
 		}
 
 		contentDiv.appendChild(messagesContainer);
@@ -182,9 +198,19 @@
 
 		modal.addCancel('Cancel');
 		modal.addConfirm('Go to Message', async () => {
-			// Store the message UUID instead of text
-			console.log('Storing message UUID to find:', result.matched_message_id);
-			sessionStorage.setItem('message_uuid_to_find', result.matched_message_id);
+			// Show loading modal
+			const loadingModal = createLoadingModal('Navigating to message...');
+			loadingModal.show();
+
+			// For human messages, use the next (assistant) message's UUID since
+			// user messages don't have data-message-uuid attributes in the DOM
+			let targetUuid = result.matched_message_id;
+			if (result.role === 'human' && result.next_message_id) {
+				targetUuid = result.next_message_id;
+				sessionStorage.setItem('highlight_previous_message', 'true');
+			}
+
+			sessionStorage.setItem('message_uuid_to_find', targetUuid);
 
 			const longestLeaf = conversation.findLongestLeaf(result.matched_message_id);
 			await conversation.setCurrentLeaf(longestLeaf.leafId);
@@ -196,6 +222,11 @@
 		modal.modal.classList.add('max-w-2xl', 'w-[90vw]');
 
 		modal.show();
+
+		// Scroll to matched message
+		if (matchedBlock) {
+			setTimeout(() => matchedBlock.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
+		}
 	}
 
 	// ======== AUTO-OPEN SEARCH ========
@@ -452,7 +483,8 @@
 	// ======== SCROLL TO TEXT ========
 	function scrollToMessageByUuid() {
 		const messageUuid = sessionStorage.getItem('message_uuid_to_find');
-		console.log('scrollToMessageByUuid called, messageUuid:', messageUuid);
+		const highlightPrevious = sessionStorage.getItem('highlight_previous_message') === 'true';
+		//console.log('scrollToMessageByUuid called, messageUuid:', messageUuid, 'highlightPrevious:', highlightPrevious);
 		if (!messageUuid) return;
 
 		const maxRetries = 20;
@@ -461,24 +493,34 @@
 
 		function attemptScroll() {
 			attempts++;
-			console.log(`Attempt ${attempts} to find message with UUID: ${messageUuid}`);
+			//console.log(`Attempt ${attempts} to find message with UUID: ${messageUuid}`);
 
 			// Look for the element with matching data-message-uuid
 			const messageElement = document.querySelector(`[data-message-uuid="${messageUuid}"]`);
 
 			if (messageElement) {
-				console.log('FOUND IT!');
 				sessionStorage.removeItem('message_uuid_to_find');
+				sessionStorage.removeItem('highlight_previous_message');
 
-				messageElement.scrollIntoView({
-					behavior: 'smooth',
-					block: 'start'
-				});
+				let targetElement = messageElement;
+				const allMessages = getUIMessages().allMessages;
+				// If we need to highlight the previous (human) message
+				if (highlightPrevious) {
+					const msgIndex = Array.from(allMessages).findIndex(el =>
+						el === messageElement || el.contains(messageElement) || messageElement.contains(el)
+					);
+					if (msgIndex > 0) {
+						targetElement = allMessages[msgIndex - 1];
+						console.log('Highlighting previous message instead:', targetElement);
+					}
+				}
 
-				messageElement.style.transition = 'background-color 0.3s';
-				messageElement.style.backgroundColor = '#2c84db4d';
+				targetElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+				targetElement.style.transition = 'background-color 0.3s';
+				targetElement.style.backgroundColor = '#2c84db4d';
 				setTimeout(() => {
-					messageElement.style.backgroundColor = '';
+					targetElement.style.backgroundColor = '';
 				}, 4000);
 
 				return true;
@@ -490,6 +532,7 @@
 			} else {
 				console.log('Giving up after', maxRetries, 'attempts');
 				sessionStorage.removeItem('message_uuid_to_find');
+				sessionStorage.removeItem('highlight_previous_message');
 			}
 		}
 
