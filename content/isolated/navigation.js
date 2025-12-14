@@ -345,6 +345,9 @@
 		topButtonsRow.className = CLAUDE_CLASSES.FLEX_GAP_2 + ' mb-4';
 
 		const latestBtn = createClaudeButton('Go to Latest', 'secondary', async () => {
+			const loadingModal = createLoadingModal('Navigating to latest message...');
+			loadingModal.show();
+
 			let latestMessage = null;
 			let latestTimestamp = 0;
 
@@ -364,6 +367,9 @@
 		});
 
 		const longestBtn = createClaudeButton('Go to Longest', 'secondary', async () => {
+			const loadingModal = createLoadingModal('Navigating to longest branch...');
+			loadingModal.show();
+
 			const rootId = "00000000-0000-4000-8000-000000000000";
 			const longestLeaf = conversation.findLongestLeaf(rootId);
 			await conversation.setCurrentLeaf(longestLeaf.leafId);
