@@ -174,26 +174,33 @@
 		const orgId = urlParts[urlParts.indexOf('organizations') + 1];
 		const conversationId = urlParts[urlParts.indexOf('chat_conversations') + 1];
 
-		// Create conversation and get messages
+		// Create conversation and get messages (trunk only to handle multiple variants)
 		const conversation = new ClaudeConversation(orgId, conversationId);
-		const messages = await conversation.getMessages(true);
+		const ROOT_UUID = '00000000-0000-4000-8000-000000000000';
+		const messages = await conversation.getMessages(false);
 
 		// Find the existing message being edited
-		const existingMessage = messages.find(
+		let existingMessage = messages.find(
 			m => m.parent_message_uuid === bodyData.parent_message_uuid && m.sender === 'human'
 		);
+
+		// If not found, it's the first message (whose parent was reparented to a phantom)
+		if (!existingMessage) {
+			existingMessage = messages.find(
+				m => m.sender === 'human' && m.parent_message_uuid === ROOT_UUID
+			);
+		}
 
 		// Create working message for editing
 		editMessage = new ClaudeMessage(conversation);
 		editMessage.text = bodyData.prompt.trim();
 		editMessage.parent_message_uuid = bodyData.parent_message_uuid;
-
 		// Copy files from existing message (if any)
-		if (existingMessage) {
-			for (const file of existingMessage.files) {
-				editMessage.attachFile(file);
-			}
+
+		for (const file of existingMessage.files) {
+			editMessage.attachFile(file);
 		}
+
 
 		// Extract style text from personalized_styles array
 		const originalStyle = bodyData.personalized_styles?.[0];
