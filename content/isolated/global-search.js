@@ -6,6 +6,7 @@
 
 	// ======== STATE ========
 	let isFirstSyncOnRecents = true;
+	let syncCancelled = false;
 	// Poll for navigation away from /recents
 	setInterval(() => {
 		if (!window.location.pathname.includes('/recents')) {
@@ -71,6 +72,8 @@
 
 		async function processChunk(chunk) {
 			for (let i = 0; i < chunk.length; i++) {
+				if (syncCancelled) return; // Early exit on cancel
+
 				const conv = chunk[i];
 
 				try {
@@ -103,6 +106,7 @@
 	}
 
 	async function triggerSync() {
+		syncCancelled = false; // Reset cancellation state
 		const loadingModal = createLoadingModal('Initializing sync...');
 		if (isFirstSyncOnRecents) {
 			loadingModal.show(); // Show only on first sync when on /recents
@@ -123,36 +127,73 @@
 				loadingModal.setContent(createLoadingContent(`Preparing to sync ${toUpdate.length} conversations...`));
 				await new Promise(resolve => setTimeout(resolve, 2000)); // Let them read it
 
-				try {
-					await syncConversationsViaExport(loadingModal);
-				} catch (error) {
-					console.error('GDPR export failed:', error);
-					loadingModal.destroy();
+				while (true) {
+					try {
+						await syncConversationsViaExport(loadingModal);
+						break; // Success, exit loop
+					} catch (error) {
+						// Handle direct retry from check-in modal (skip showing failure modal)
+						if (error.message === 'GDPR_RETRY') {
+							loadingModal.setContent(createLoadingContent('Retrying export...'));
+							continue;
+						}
 
-					// Ask user if they want to fallback
-					const shouldFallback = await showClaudeConfirm(
-						'Export Failed',
-						`The data export failed: ${error.message}\n\nWould you like to fall back to standard sync? This will take longer but should work reliably.`
-					);
+						console.error('GDPR export failed:', error);
+						loadingModal.destroy();
 
-					if (shouldFallback) {
-						const newLoadingModal = createLoadingModal('Starting standard sync...');
-						newLoadingModal.show();
+						// Ask user what they want to do with three options
+						let errorMessage = error.message;
+						if (errorMessage == "USER_CANCEL") errorMessage = undefined
+						const choice = await showClaudeThreeOption(
+							'Export Failed',
+							`The bulk data export failed${errorMessage ? `: ${errorMessage}` : '. '}\n\nWhat would you like to do?`,
+							{
+								left: { text: 'Cancel' },
+								middle: { text: 'Slow Sync' },
+								right: { text: 'Retry' }
+							}
+						);
 
-						await syncConversationsIndividually((status) => {
-							newLoadingModal.setContent(createLoadingContent(status));
-						}, toUpdate);
+						if (choice === 'right') { // Retry
+							// Show loading modal again and retry
+							loadingModal.show();
+							loadingModal.setContent(createLoadingContent('Retrying export...'));
+							continue;
+						} else if (choice === 'middle') { // Use Standard
+							const newLoadingModal = createLoadingModal('Starting standard sync...');
+							// Add cancel button for fallback sync
+							newLoadingModal.addCancel('Cancel', () => {
+								syncCancelled = true;
+								sessionStorage.setItem('text_search_enabled', 'false');
+								newLoadingModal.destroy();
+								window.location.reload();
+							});
+							newLoadingModal.show();
 
-						newLoadingModal.destroy();
-					} else {
-						// User cancelled. Reload page and set text search off
-						sessionStorage.setItem('text_search_enabled', 'false');
-						window.location.reload();
-						return;
+							await syncConversationsIndividually((status) => {
+								newLoadingModal.setContent(createLoadingContent(status));
+							}, toUpdate);
+
+							newLoadingModal.destroy();
+							break; // Done with standard sync
+						} else {
+							// User cancelled. Reload page and set text search off
+							sessionStorage.setItem('text_search_enabled', 'false');
+							window.location.reload();
+							return;
+						}
 					}
 				}
 			} else {
 				// Use incremental sync for small amounts of conversations
+				// Add cancel button for individual sync
+				loadingModal.addCancel('Cancel', () => {
+					syncCancelled = true;
+					sessionStorage.setItem('text_search_enabled', 'false');
+					loadingModal.destroy();
+					window.location.reload();
+				});
+
 				await syncConversationsIndividually((status) => {
 					loadingModal.setContent(createLoadingContent(status));
 				}, toUpdate);
@@ -256,56 +297,59 @@
 		console.log('[GDPR Export] Export requested, nonce:', nonce);
 
 		// Phase 2: Poll for completion
-		const MAX_POLL_ATTEMPTS = 12; // 6 minutes at 30s intervals
 		const POLL_INTERVAL_MS = 30000; // 30 seconds
+		const CHECK_IN_INTERVAL_MS = 180000; // 3 minutes
 
 		let storageUrl = null;
+		let lastCheckInTime = Date.now();
 
-		for (let attempt = 1; attempt <= MAX_POLL_ATTEMPTS; attempt++) {
+		while (true) {
+			const msUntilCheckIn = CHECK_IN_INTERVAL_MS - (Date.now() - lastCheckInTime);
+			const mins = Math.floor(msUntilCheckIn / 60000);
+			const secs = Math.floor((msUntilCheckIn % 60000) / 1000);
 			loadingModal.setContent(createLoadingContent(
-				`Waiting for export to complete...\n(Attempt ${attempt}/${MAX_POLL_ATTEMPTS})`
+				`Waiting for export to complete...\nChecking in in ${mins}m ${secs}s...`
 			));
 
-			console.log(`[GDPR Export] Polling attempt ${attempt}/${MAX_POLL_ATTEMPTS}...`);
-
 			const downloadPageUrl = `https://claude.ai/export/${orgId}/download/${nonce}`;
-			console.log('[GDPR Export] Checking:', downloadPageUrl);
 
 			try {
 				const pollResponse = await fetch(downloadPageUrl);
-				console.log('[GDPR Export] Poll response status:', pollResponse.status);
 
 				if (pollResponse.status === 200) {
 					const html = await pollResponse.text();
-					console.log('[GDPR Export] Got HTML response, length:', html.length);
 
 					// Extract storage URL from the HTML
 					const urlMatch = html.match(/https:\/\/storage\.googleapis\.com\/user-data-export-production\/[^"]+/);
 
 					if (urlMatch) {
 						storageUrl = urlMatch[0].replace(/\\u0026/g, '&');
-						console.log('[GDPR Export] Found storage URL:', storageUrl.substring(0, 100) + '...');
+						console.log('[GDPR Export] Found storage URL');
 						break;
-					} else {
-						console.log('[GDPR Export] Storage URL not in page yet, export still processing...');
 					}
-				} else {
-					console.warn('[GDPR Export] Unexpected response status:', pollResponse.status);
 				}
 			} catch (error) {
-				console.warn(`[GDPR Export] Poll attempt ${attempt} failed:`, error.message);
-				// Continue to next attempt
+				console.warn(`[GDPR Export] Poll failed:`, error.message);
 			}
 
-			// Wait before next attempt (except on last attempt)
-			if (attempt < MAX_POLL_ATTEMPTS) {
-				await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
-			}
-		}
+			// Wait before next attempt
+			await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
 
-		if (!storageUrl) {
-			console.error('[GDPR Export] Export did not complete within timeout');
-			throw new Error('Export timed out after 6 minutes');
+			// Check if it's time for a check-in
+			if (Date.now() - lastCheckInTime >= CHECK_IN_INTERVAL_MS) {
+				lastCheckInTime = Date.now();
+				const choice = await showClaudeThreeOption(
+					'Export In Progress',
+					'The data export is taking a while. Would you like to keep waiting?\n\nIf you received an email from Anthropic stating the export failed, retry or cancel.',
+					{
+						left: { text: 'Cancel' },
+						middle: { text: 'Retry', variant: 'primary' },
+						right: { text: 'Keep Waiting', variant: 'primary' }
+					}
+				);
+				if (choice === 'left') throw new Error('USER_CANCEL');
+				if (choice === 'middle') throw new Error('GDPR_RETRY');
+			}
 		}
 
 		// Phase 3: Request download from background

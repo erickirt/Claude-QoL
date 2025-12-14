@@ -289,6 +289,25 @@ function showClaudeConfirm(title, message) {
 	});
 }
 
+// Three-option modal for more complex choices
+// options = { left: {text, variant?}, middle: {text, variant?}, right: {text, variant?} }
+// Returns 'left', 'middle', or 'right'
+function showClaudeThreeOption(title, message, options) {
+	return new Promise((resolve) => {
+		const messageEl = document.createElement('p');
+		messageEl.className = 'text-text-100';
+		messageEl.textContent = message;
+
+		const modal = new ClaudeModal(title, messageEl, false); // Not dismissible
+
+		modal.addButton(options.left.text, options.left.variant || 'secondary', () => resolve('left'));
+		modal.addButton(options.middle.text, options.middle.variant || 'secondary', () => resolve('middle'));
+		modal.addButton(options.right.text, options.right.variant || 'primary', () => resolve('right'));
+
+		modal.show();
+	});
+}
+
 // Full-featured prompt with all options
 function showClaudePrompt(title, message, placeholder = '', defaultValue = '', onValidate = null) {
 	return new Promise((resolve, reject) => {
