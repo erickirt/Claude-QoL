@@ -341,7 +341,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 				}
 			}
 
-			const newConversationId = await createFork(
+			const { newUuid, failedFiles } = await createFork(
 				orgId,
 				messages,
 				chatName,
@@ -349,12 +349,16 @@ If this is a writing or creative discussion, include sections for characters, pl
 				forkAttachments
 			);
 
+			console.log('Forked conversation created:', newUuid);
 			loadingModal.setContent(createLoadingContent('Fork complete! Redirecting...'));
-			console.log('Forked conversation created:', newConversationId);
 
-			setTimeout(() => {
-				if (newConversationId) window.location.href = `/chat/${newConversationId}`;
-			}, 100);
+			if (failedFiles && failedFiles.length > 0) {
+				// Show warning modal - redirect happens on OK click
+				showFailedFilesModal(failedFiles, newUuid);
+			} else {
+				// No failures - redirect immediately
+				window.location.href = `/chat/${newUuid}`;
+			}
 
 		} catch (error) {
 			if (error.message === 'USER_CANCELLED') {
@@ -561,6 +565,26 @@ If this is a writing or creative discussion, include sections for characters, pl
 		});
 	}
 
+	function showFailedFilesModal(failedFiles, newUuid) {
+		const content = document.createElement('div');
+		content.innerHTML = '<p class="mb-2">The following files could not be transferred to the forked conversation:</p>';
+
+		const fileList = document.createElement('ul');
+		fileList.className = 'list-disc pl-5 space-y-1';
+		failedFiles.forEach(filename => {
+			const li = document.createElement('li');
+			li.textContent = filename;
+			fileList.appendChild(li);
+		});
+		content.appendChild(fileList);
+
+		const modal = new ClaudeModal('File Transfer Warning', content);
+		modal.addConfirm('OK', () => {
+			window.location.href = `/chat/${newUuid}`;
+		});
+		modal.show();
+	}
+
 	async function createFork(orgId, messages, chatName, projectUuid, forkAttachments) {
 		if (!chatName || chatName.trim() === '') chatName = "Untitled";
 		const newName = `Fork of ${chatName}`;
@@ -588,8 +612,14 @@ If this is a writing or creative discussion, include sections for characters, pl
 		const dedupedFiles = deduplicateByFilename(allFiles);
 
 		// Re-upload files using addFile() which handles all file types
+		const failedFiles = [];
 		for (const f of dedupedFiles) {
-			await forkMessage.addFile(f);
+			try {
+				await forkMessage.addFile(f);
+			} catch (error) {
+				console.log(`Failed to transfer file ${f.file_name}:`, error);
+				failedFiles.push(f.file_name);
+			}
 		}
 
 		// Figure out why we get redirected before the message is visible
@@ -598,7 +628,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 
 		await new Promise(r => setTimeout(r, 5000));
 
-		return newUuid;
+		return { newUuid, failedFiles };
 	}
 
 	function buildSummaryPrompt(priorSummaryCount, includeAttachments) {
