@@ -68,59 +68,7 @@
 	}
 
 	// #endregion
-	// #region  BOOKMARK ITEM 
-	function createBookmarkItem(name, bookmarkUuid, conversationId, conversation, onUpdate) {
-		const item = document.createElement('div');
-		item.className = CLAUDE_CLASSES.LIST_ITEM + ' flex items-center gap-2';
-
-		// Icon
-		const icon = document.createElement('span');
-		icon.className = 'text-lg';
-		icon.textContent = '📍';
-		item.appendChild(icon);
-
-		// Name (clickable area)
-		const nameDiv = document.createElement('div');
-		nameDiv.className = 'flex-1 text-sm text-text-100 cursor-pointer';
-		nameDiv.textContent = name;
-		nameDiv.onclick = async () => {
-			const loadingModal = createLoadingModal('Navigating to bookmark...');
-			try {
-				loadingModal.show();
-
-				// Navigate to the bookmarked leaf
-				const longestLeaf = conversation.findLongestLeaf(bookmarkUuid);
-				await conversation.setCurrentLeaf(longestLeaf.leafId);
-				sessionStorage.setItem('message_uuid_to_find', bookmarkUuid);
-				window.location.reload();
-			} catch (error) {
-				console.error('Navigation failed:', error);
-				showClaudeAlert('Navigation Error', 'Failed to navigate. The bookmark may be invalid.');
-				loadingModal.destroy();
-			}
-		};
-
-		item.appendChild(nameDiv);
-
-		// Delete button
-		const deleteBtn = createClaudeButton('×', 'icon');
-		deleteBtn.classList.remove('h-9', 'w-9');
-		deleteBtn.classList.add('h-7', 'w-7', 'text-lg');
-		deleteBtn.onclick = async (e) => {
-			e.stopPropagation(); // Prevent triggering navigation
-			const confirmed = await showClaudeConfirm('Delete Bookmark', `Are you sure you want to delete the bookmark "${name}"?`);
-			if (confirmed) {
-				deleteBookmark(conversationId, name);
-				item.remove();
-				onUpdate();
-			}
-		};
-		item.appendChild(deleteBtn);
-
-		return item;
-	}
-
-	//#region TREE VIEW MODAL
+	//#region TREE VIEW
 	async function buildBookmarkTree(conversationId, conversation) {
 		const ROOT_UUID = "00000000-0000-4000-8000-000000000000";
 
@@ -180,7 +128,7 @@
 		return { tree, bookmarks, bookmarkDepths };
 	}
 
-	function renderBookmarkTree(tree, parentUuid, conversation, onNavigate, bookmarkDepths) {
+	function renderBookmarkTree(tree, parentUuid, conversation, bookmarkDepths, conversationId, onDelete) {
 		const children = tree.get(parentUuid) || [];
 		if (children.length === 0) return null;
 
@@ -204,18 +152,14 @@
 
 			// Create bookmark item
 			const item = document.createElement('div');
-			item.className = 'inline-block py-2 px-3 bg-bg-200 border border-border-300 hover:bg-bg-300 rounded cursor-pointer transition-colors';
+			item.className = 'inline-flex items-center gap-1 py-2 px-3 bg-bg-200 border border-border-300 hover:bg-bg-300 rounded transition-colors';
 
-			// Check if this bookmark has children (is a branch)
-			const hasChildren = tree.has(bookmark.uuid) && tree.get(bookmark.uuid).length > 0;
-			const icon = hasChildren ? '📍' : '📍';
-
-			// Create content
+			// Create clickable content area
 			const content = document.createElement('div');
-			content.className = 'flex items-center gap-2 whitespace-nowrap';
+			content.className = 'flex items-center gap-2 whitespace-nowrap cursor-pointer';
 
 			const iconSpan = document.createElement('span');
-			iconSpan.textContent = icon;
+			iconSpan.textContent = '📍';
 			content.appendChild(iconSpan);
 
 			const nameSpan = document.createElement('span');
@@ -223,10 +167,8 @@
 			nameSpan.textContent = bookmark.name;
 			content.appendChild(nameSpan);
 
-			item.appendChild(content);
-
-			// Click handler
-			item.onclick = async () => {
+			// Click handler for navigation
+			content.onclick = async () => {
 				const loadingModal = createLoadingModal('Navigating to bookmark...');
 				try {
 					loadingModal.show();
@@ -242,10 +184,26 @@
 				}
 			};
 
+			item.appendChild(content);
+
+			// Delete button
+			const deleteBtn = createClaudeButton('×', 'icon');
+			deleteBtn.classList.remove('h-9', 'w-9');
+			deleteBtn.classList.add('h-6', 'w-6', 'text-base', 'ml-1');
+			deleteBtn.onclick = async (e) => {
+				e.stopPropagation();
+				const confirmed = await showClaudeConfirm('Delete Bookmark', `Are you sure you want to delete the bookmark "${bookmark.name}"?`);
+				if (confirmed) {
+					deleteBookmark(conversationId, bookmark.name);
+					onDelete();
+				}
+			};
+			item.appendChild(deleteBtn);
+
 			bookmarkWrapper.appendChild(item);
 
 			// Recursively render children
-			const childTree = renderBookmarkTree(tree, bookmark.uuid, conversation, onNavigate, bookmarkDepths);
+			const childTree = renderBookmarkTree(tree, bookmark.uuid, conversation, bookmarkDepths, conversationId, onDelete);
 			if (childTree) {
 				bookmarkWrapper.appendChild(childTree);
 			}
@@ -256,64 +214,6 @@
 		return container;
 	}
 
-	async function showBookmarkTreeModal(conversationId, conversation) {
-		const { tree, bookmarks, bookmarkDepths } = await buildBookmarkTree(conversationId, conversation);
-
-		// Check if there are any bookmarks
-		if (Object.keys(bookmarks).length === 0) {
-			showClaudeAlert('No Bookmarks', 'You haven\'t created any bookmarks yet.');
-			return;
-		}
-
-		const contentDiv = document.createElement('div');
-
-		// Create root node (unclickable)
-		const rootNode = document.createElement('div');
-		rootNode.className = 'inline-block py-2 px-3 bg-bg-300 border border-border-300 rounded opacity-60';
-		rootNode.style.cursor = 'default';
-
-		const rootContent = document.createElement('div');
-		rootContent.className = 'flex items-center gap-2 whitespace-nowrap';
-
-		const rootIcon = document.createElement('span');
-		rootIcon.textContent = '🌳';
-		rootContent.appendChild(rootIcon);
-
-		const rootLabel = document.createElement('span');
-		rootLabel.className = 'text-sm text-text-200';
-		rootLabel.textContent = 'Root';
-		rootContent.appendChild(rootLabel);
-
-		rootNode.appendChild(rootContent);
-		contentDiv.appendChild(rootNode);
-
-		// Render tree starting from root
-		const ROOT_UUID = "00000000-0000-4000-8000-000000000000";
-		const treeContainer = renderBookmarkTree(tree, ROOT_UUID, conversation, null, bookmarkDepths);
-
-		if (treeContainer) {
-			// Wrap in scrollable container
-			const scrollContainer = document.createElement('div');
-			scrollContainer.className = 'max-h-[60vh] overflow-y-auto';
-			scrollContainer.appendChild(treeContainer);
-			contentDiv.appendChild(scrollContainer);
-		} else {
-			const emptyMsg = document.createElement('div');
-			emptyMsg.className = 'text-center text-text-400 py-8';
-			emptyMsg.textContent = 'No bookmarks to display.';
-			contentDiv.appendChild(emptyMsg);
-		}
-
-		// Create and show modal
-		const modal = new ClaudeModal('Bookmark Tree View (Sorted by depth)', contentDiv);
-		modal.addCancel('Close');
-
-		// Make modal a bit wider
-		modal.modal.classList.remove('max-w-md');
-		modal.modal.classList.add('max-w-2xl');
-
-		modal.show();
-	}
 	// #endregion
 
 	//#region MAIN NAVIGATION MODAL
@@ -322,10 +222,8 @@
 		loading.show();
 
 		let conversation;
-		let conversationData;
 		try {
 			conversation = await getConversation();
-			conversationData = await conversation.getData(true);
 		} catch (error) {
 			console.error('Failed to fetch conversation:', error);
 			loading.setTitle('Error');
@@ -333,9 +231,6 @@
 			loading.addConfirm('OK');
 			return;
 		}
-
-		// Close loading modal
-		loading.destroy();
 
 		const conversationId = getConversationId();
 		const contentDiv = document.createElement('div');
@@ -382,60 +277,66 @@
 		topButtonsRow.appendChild(longestBtn);
 		contentDiv.appendChild(topButtonsRow);
 
-		// Bookmarks list container
-		const bookmarksList = document.createElement('div');
-		bookmarksList.className = CLAUDE_CLASSES.LIST_CONTAINER;
-		bookmarksList.style.maxHeight = '20rem';
+		// Tree view container
+		const treeContainer = document.createElement('div');
+		treeContainer.className = 'max-h-[60vh] overflow-y-auto';
+		contentDiv.appendChild(treeContainer);
 
-		// Function to update the list
-		const updateBookmarksList = () => {
-			bookmarksList.innerHTML = '';
-			const bookmarks = getBookmarks(conversationId);
-			const entries = Object.entries(bookmarks);
+		// Function to render the tree
+		const renderTree = async () => {
+			treeContainer.innerHTML = '';
 
-			if (entries.length === 0) {
+			const { tree, bookmarks, bookmarkDepths } = await buildBookmarkTree(conversationId, conversation);
+
+			// Check if there are any bookmarks
+			if (Object.keys(bookmarks).length === 0) {
 				const emptyMsg = document.createElement('div');
 				emptyMsg.className = 'text-center text-text-400 py-8';
-				emptyMsg.textContent = 'No bookmarks yet. Add your first bookmark below.';
-				bookmarksList.appendChild(emptyMsg);
-			} else {
-				entries.forEach(([name, bookmarkUuid]) => {
-					const item = createBookmarkItem(name, bookmarkUuid, conversationId, conversation, updateBookmarksList);
-					bookmarksList.appendChild(item);
-				});
+				emptyMsg.textContent = 'No bookmarks yet. Use the bookmark button on messages to add one.';
+				treeContainer.appendChild(emptyMsg);
+				return;
+			}
+
+			// Create root node (unclickable)
+			const rootNode = document.createElement('div');
+			rootNode.className = 'inline-block py-2 px-3 bg-bg-300 border border-border-300 rounded opacity-60';
+			rootNode.style.cursor = 'default';
+
+			const rootContent = document.createElement('div');
+			rootContent.className = 'flex items-center gap-2 whitespace-nowrap';
+
+			const rootIcon = document.createElement('span');
+			rootIcon.textContent = '🌳';
+			rootContent.appendChild(rootIcon);
+
+			const rootLabel = document.createElement('span');
+			rootLabel.className = 'text-sm text-text-200';
+			rootLabel.textContent = 'Root';
+			rootContent.appendChild(rootLabel);
+
+			rootNode.appendChild(rootContent);
+			treeContainer.appendChild(rootNode);
+
+			// Render tree starting from root
+			const ROOT_UUID = "00000000-0000-4000-8000-000000000000";
+			const treeContent = renderBookmarkTree(tree, ROOT_UUID, conversation, bookmarkDepths, conversationId, renderTree);
+
+			if (treeContent) {
+				treeContainer.appendChild(treeContent);
 			}
 		};
 
-		updateBookmarksList();
-		contentDiv.appendChild(bookmarksList);
+		// Initial render
+		await renderTree();
 
-		// Bottom buttons row
-		const bottomButtonsRow = document.createElement('div');
-		bottomButtonsRow.className = CLAUDE_CLASSES.FLEX_GAP_2 + ' mt-4';
-
-		const addBtn = createClaudeButton('+ Add Current Position', 'secondary');
-		addBtn.classList.add('w-full');
-		addBtn.onclick = async () => {
-			try {
-				const currentLeafId = conversationData.current_leaf_message_uuid;
-				await showNameInputModal(conversationId, currentLeafId);
-				updateBookmarksList();
-			} catch (error) {
-				// User cancelled, do nothing
-			}
-		};
-
-		const treeBtn = createClaudeButton('🌳 View Tree', 'secondary');
-		treeBtn.classList.add('w-full');
-		treeBtn.onclick = () => showBookmarkTreeModal(conversationId, conversation);
-
-		bottomButtonsRow.appendChild(addBtn);
-		bottomButtonsRow.appendChild(treeBtn);
-		contentDiv.appendChild(bottomButtonsRow);
+		// Close loading modal
+		loading.destroy();
 
 		// Create and show modal
 		const modal = new ClaudeModal('Navigation', contentDiv);
 		modal.addCancel('Close');
+		modal.modal.classList.remove('max-w-md');
+		modal.modal.classList.add('max-w-2xl');
 		modal.show();
 	}
 	// #endregion
