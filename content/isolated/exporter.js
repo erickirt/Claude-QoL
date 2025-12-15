@@ -590,10 +590,9 @@
 		importMessage.sender = 'human';
 		if (model) importMessage.model = model;
 
+		const fileMap = new Map(); // originalFile -> newFile
 		// Upload zip files and remap references in phantom messages
 		if (zipFiles && zipFiles.length > 0) {
-			const fileMap = new Map(); // originalFile -> newFile
-
 			for (let i = 0; i < zipFiles.length; i++) {
 				const { originalFile, blob } = zipFiles[i];
 
@@ -604,10 +603,14 @@
 				const newFile = await importMessage.addFile(blob, originalFile.file_name);
 				fileMap.set(originalFile, newFile);
 			}
-
-			// Replace file references in messages (for phantom storage)
-			for (const msg of messages) {
-				msg._files = msg._files.map(f => fileMap.get(f) || f);
+		}
+		// Replace file references in messages (for phantom storage)
+		for (const msg of messages) {
+			const originalFiles = [...msg.files];
+			msg.clearFiles();
+			for (const f of originalFiles) {
+				const newFile = fileMap.get(f);
+				if (newFile) msg.attachFile(newFile);
 			}
 		}
 
@@ -615,6 +618,13 @@
 		const cleanedContent = messages
 			.map(msg => msg.toChatlogString())
 			.join('\n\n');
+
+		// Remove ClaudeAttachments from importMessage - they're inline in chatlog
+		for (const f of [...importMessage.files]) {
+			if (f instanceof ClaudeAttachment) {
+				importMessage.removeFile(f.file_name);
+			}
+		}
 
 		// Add chatlog (conversation metadata - force inline)
 		await importMessage.addFile(cleanedContent, "chatlog.txt", true);

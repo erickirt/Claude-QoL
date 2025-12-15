@@ -621,72 +621,6 @@
 		return container;
 	}
 
-	async function isLikelyTextFile(file) {
-		// First check browser-provided MIME type
-		if (file.type && file.type.startsWith('text/')) {
-			return true;
-		}
-
-		// Check MIME type from library
-		const mimeType = mime.getType(file.name);
-		if (mimeType) {
-			// text/* types are obviously text
-			if (mimeType.startsWith('text/')) {
-				return true;
-			}
-			// Many code/data files have application/* types but are text
-			const textLikeTypes = [
-				'application/javascript',
-				'application/json',
-				'application/xml',
-				'application/x-sh',
-				'application/x-python',
-				'application/x-ruby',
-				'application/x-perl',
-				'application/x-php',
-				'application/sql',
-				'application/graphql',
-				'application/ld+json',
-				'application/x-yaml',
-				'application/toml',
-			];
-			if (textLikeTypes.includes(mimeType) || mimeType.endsWith('+xml') || mimeType.endsWith('+json')) {
-				return true;
-			}
-		}
-
-		// Fallback: Try to read first 1KB to check if it's text
-		try {
-			const slice = file.slice(0, 1024);
-			const arrayBuffer = await slice.arrayBuffer();
-			const bytes = new Uint8Array(arrayBuffer);
-
-			// Check for null bytes (binary files often have these)
-			for (let i = 0; i < bytes.length; i++) {
-				if (bytes[i] === 0) {
-					return false; // Likely binary
-				}
-			}
-
-			// Check if most bytes are printable ASCII or common UTF-8
-			let printableCount = 0;
-			for (let i = 0; i < bytes.length; i++) {
-				const byte = bytes[i];
-				// Printable ASCII, tab, newline, carriage return, or valid UTF-8 start bytes
-				if ((byte >= 32 && byte <= 126) || byte === 9 || byte === 10 || byte === 13 || byte >= 128) {
-					printableCount++;
-				}
-			}
-
-			// If >90% of bytes are printable, likely text
-			return (printableCount / bytes.length) > 0.9;
-		} catch (error) {
-			console.error('Error checking file type:', error);
-			// Default to allowing it if we can't check
-			return true;
-		}
-	}
-
 	function handleAddAttachment() {
 		document.getElementById('attachment-input').click();
 	}
@@ -805,7 +739,6 @@
 				: buildFileItem(result);
 			fileElementMap.set(item, result);
 			filesList.appendChild(item);
-			debugger;
 		}
 	}
 

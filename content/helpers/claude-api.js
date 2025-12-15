@@ -368,13 +368,6 @@ class ClaudeFile {
 		return await response.blob();
 	}
 
-	async reupload(orgId) {
-		const blob = await this.download();
-		if (!blob) {
-			return null;
-		}
-		return ClaudeFile.upload(orgId, blob, this.file_name);
-	}
 
 	toApiFormat() {
 		return {
@@ -534,11 +527,6 @@ class ClaudeCodeExecutionFile {
 		return await response.blob();
 	}
 
-	async reupload(conversation, fileName = null) {
-		const blob = await this.download();
-		return conversation.uploadToCodeExecution(blob, fileName ?? this.file_name);
-	}
-
 	toApiFormat() {
 		return {
 			file_uuid: this.file_uuid,
@@ -656,6 +644,15 @@ class ClaudeMessage {
 	async addFile(input, filename = null, forceAttachmentMode = false) {
 		const data = await this.conversation.getData();
 		const codeExecutionEnabled = data.settings?.enabled_monkeys_in_a_barrel === true;
+
+		// Let's make sure the input blob isn't a text file first...
+		if (input instanceof Blob) {
+			const isText = await isLikelyTextFile(input)
+			if (isText) {
+				const textContent = await input.text();
+				input = textContent;
+			}
+		}
 
 		// Handle string input (text content)
 		if (typeof input === 'string') {
@@ -790,7 +787,7 @@ class ClaudeMessage {
 
 		for (const f of this._files) {
 			if (f instanceof ClaudeAttachment) {
-				debugger;
+
 				attachments.push(f.toApiFormat());
 			} else if (f instanceof ClaudeCodeExecutionFile) {
 				// Check if this should be inlined as attachment
@@ -802,7 +799,6 @@ class ClaudeMessage {
 
 				if (shouldInline) {
 					// Short text files: inline as attachment ONLY (not in files)
-					debugger;
 					attachments.push({
 						extracted_content: f.extracted_content,
 						file_name: f.file_name,
@@ -812,7 +808,6 @@ class ClaudeMessage {
 				} else {
 					// Large files or non-text: include in files array
 					const apiFormat = f.toApiFormat();
-					debugger;
 					files_v2.push(apiFormat);
 					files_completion.push(f.file_uuid);
 
@@ -1255,6 +1250,72 @@ function getOrgId() {
 function getConversationId() {
 	const match = window.location.pathname.match(/\/chat\/([a-f0-9-]+)/);
 	return match ? match[1] : null;
+}
+
+async function isLikelyTextFile(file) {
+	// First check browser-provided MIME type
+	if (file.type && file.type.startsWith('text/')) {
+		return true;
+	}
+
+	// Check MIME type from library
+	const mimeType = mime.getType(file.name);
+	if (mimeType) {
+		// text/* types are obviously text
+		if (mimeType.startsWith('text/')) {
+			return true;
+		}
+		// Many code/data files have application/* types but are text
+		const textLikeTypes = [
+			'application/javascript',
+			'application/json',
+			'application/xml',
+			'application/x-sh',
+			'application/x-python',
+			'application/x-ruby',
+			'application/x-perl',
+			'application/x-php',
+			'application/sql',
+			'application/graphql',
+			'application/ld+json',
+			'application/x-yaml',
+			'application/toml',
+		];
+		if (textLikeTypes.includes(mimeType) || mimeType.endsWith('+xml') || mimeType.endsWith('+json')) {
+			return true;
+		}
+	}
+
+	// Fallback: Try to read first 1KB to check if it's text
+	try {
+		const slice = file.slice(0, 1024);
+		const arrayBuffer = await slice.arrayBuffer();
+		const bytes = new Uint8Array(arrayBuffer);
+
+		// Check for null bytes (binary files often have these)
+		for (let i = 0; i < bytes.length; i++) {
+			if (bytes[i] === 0) {
+				return false; // Likely binary
+			}
+		}
+
+		// Check if most bytes are printable ASCII or common UTF-8
+		let printableCount = 0;
+		for (let i = 0; i < bytes.length; i++) {
+			const byte = bytes[i];
+			// Printable ASCII, tab, newline, carriage return, or valid UTF-8 start bytes
+			if ((byte >= 32 && byte <= 126) || byte === 9 || byte === 10 || byte === 13 || byte >= 128) {
+				printableCount++;
+			}
+		}
+
+		// If >90% of bytes are printable, likely text
+		return (printableCount / bytes.length) > 0.9;
+	} catch (error) {
+		console.error('Error checking file type:', error);
+		// Default to allowing it if we can't check
+		return true;
+	}
 }
 
 const CLAUDE_MODELS = [
