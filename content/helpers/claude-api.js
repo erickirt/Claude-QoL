@@ -158,8 +158,7 @@ class ClaudeConversation {
 
 		// Ensure correct MIME type (for ClaudeFile and raw Blob cases)
 		if (!blob || !blob.type || blob.type === 'application/octet-stream') {
-			const ext = name.toLowerCase().split('.').pop();
-			const mimeType = MIME_TYPES[ext] || blob?.type || 'application/octet-stream';
+			const mimeType = mime.getType(name) || blob?.type || 'application/octet-stream';
 			const sourceBlob = blob ?? await fileOrAttachmentOrBlob.download();
 			blob = new Blob([sourceBlob], { type: mimeType });
 		}
@@ -314,19 +313,6 @@ class ClaudeConversation {
 	}
 }
 
-// File type constants
-const MIME_TYPES = {
-	'png': 'image/png',
-	'jpg': 'image/jpeg',
-	'jpeg': 'image/jpeg',
-	'gif': 'image/gif',
-	'webp': 'image/webp',
-	'svg': 'image/svg+xml',
-	'pdf': 'application/pdf',
-};
-
-const DIRECT_UPLOAD_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'pdf'];
-
 class ClaudeFile {
 	constructor(apiData) {
 		this.file_uuid = apiData.file_uuid;
@@ -404,13 +390,14 @@ class ClaudeFile {
 	}
 
 	static async upload(orgId, blob, fileName) {
-		const ext = fileName.toLowerCase().split('.').pop();
+		const mimeType = mime.getType(fileName) || 'application/octet-stream';
+		const typedBlob = new Blob([blob], { type: mimeType });
 
-		if (DIRECT_UPLOAD_EXTENSIONS.includes(ext)) {
+		// Direct upload for images and PDFs, conversion for other documents
+		const isDirectUpload = mimeType.startsWith('image/') || mimeType === 'application/pdf';
+		console.log(`[ClaudeFile] Uploading file "${fileName}" as ${isDirectUpload ? 'direct upload' : 'document conversion'} (MIME: ${mimeType})`);
+		if (isDirectUpload) {
 			// Regular file upload
-			const mimeType = MIME_TYPES[ext] || 'application/octet-stream';
-			const typedBlob = new Blob([blob], { type: mimeType });
-
 			const formData = new FormData();
 			formData.append('file', typedBlob, fileName);
 
@@ -428,9 +415,9 @@ class ClaudeFile {
 		} else {
 			// Document conversion -> returns ClaudeAttachment
 			const formData = new FormData();
-			formData.append('file', blob, fileName);
+			formData.append('file', typedBlob, fileName);
 
-			const response = await fetch(`/api/${orgId}/convert_document`, {
+			const response = await fetch(`/api/organizations/${orgId}/convert_document`, {
 				method: 'POST',
 				body: formData
 			});
@@ -803,6 +790,7 @@ class ClaudeMessage {
 
 		for (const f of this._files) {
 			if (f instanceof ClaudeAttachment) {
+				debugger;
 				attachments.push(f.toApiFormat());
 			} else if (f instanceof ClaudeCodeExecutionFile) {
 				// Check if this should be inlined as attachment
@@ -814,6 +802,7 @@ class ClaudeMessage {
 
 				if (shouldInline) {
 					// Short text files: inline as attachment ONLY (not in files)
+					debugger;
 					attachments.push({
 						extracted_content: f.extracted_content,
 						file_name: f.file_name,
@@ -823,6 +812,7 @@ class ClaudeMessage {
 				} else {
 					// Large files or non-text: include in files array
 					const apiFormat = f.toApiFormat();
+					debugger;
 					files_v2.push(apiFormat);
 					files_completion.push(f.file_uuid);
 

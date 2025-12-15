@@ -622,24 +622,40 @@
 	}
 
 	async function isLikelyTextFile(file) {
-		// First check MIME type
+		// First check browser-provided MIME type
 		if (file.type && file.type.startsWith('text/')) {
 			return true;
 		}
 
-		// Check common text file extensions
-		const textExtensions = ['.txt', '.md', '.csv', '.log', '.json', '.xml', '.yaml', '.yml',
-			'.js', '.jsx', '.ts', '.tsx', '.py', '.java', '.c', '.cpp', '.h', '.cs',
-			'.php', '.rb', '.go', '.rs', '.swift', '.kt', '.scala', '.r', '.m',
-			'.pl', '.lua', '.sh', '.bash', '.zsh', '.bat', '.cmd', '.ps1', '.sql',
-			'.html', '.htm', '.css', '.scss', '.sass', '.vue', '.svelte'];
-
-		const fileName = file.name.toLowerCase();
-		if (textExtensions.some(ext => fileName.endsWith(ext))) {
-			return true;
+		// Check MIME type from library
+		const mimeType = mime.getType(file.name);
+		if (mimeType) {
+			// text/* types are obviously text
+			if (mimeType.startsWith('text/')) {
+				return true;
+			}
+			// Many code/data files have application/* types but are text
+			const textLikeTypes = [
+				'application/javascript',
+				'application/json',
+				'application/xml',
+				'application/x-sh',
+				'application/x-python',
+				'application/x-ruby',
+				'application/x-perl',
+				'application/x-php',
+				'application/sql',
+				'application/graphql',
+				'application/ld+json',
+				'application/x-yaml',
+				'application/toml',
+			];
+			if (textLikeTypes.includes(mimeType) || mimeType.endsWith('+xml') || mimeType.endsWith('+json')) {
+				return true;
+			}
 		}
 
-		// Try to read first 1KB to check if it's text
+		// Fallback: Try to read first 1KB to check if it's text
 		try {
 			const slice = file.slice(0, 1024);
 			const arrayBuffer = await slice.arrayBuffer();
@@ -789,6 +805,7 @@
 				: buildFileItem(result);
 			fileElementMap.set(item, result);
 			filesList.appendChild(item);
+			debugger;
 		}
 	}
 
