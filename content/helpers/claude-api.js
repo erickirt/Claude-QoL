@@ -1208,10 +1208,10 @@ async function ensureSettingsState(conversation, desiredSettings) {
 	// Build mismatch description
 	const mismatches = [];
 	if (artifactsMismatch) {
-		mismatches.push(`Artifacts: Originally ${desiredArtifacts ? 'ON' : 'OFF'} → Currently ${currentArtifacts ? 'ON' : 'OFF'}`);
+		mismatches.push(`Artifacts: Originally ${desiredArtifacts ? 'ON' : 'OFF'} | Currently ${currentArtifacts ? 'ON' : 'OFF'}`);
 	}
 	if (ceMismatch) {
-		mismatches.push(`Code Execution: Originally ${desiredCE ? 'ON' : 'OFF'} → Currently ${currentCE ? 'ON' : 'OFF'}`);
+		mismatches.push(`Code Execution: Originally ${desiredCE ? 'ON' : 'OFF'} | Currently ${currentCE ? 'ON' : 'OFF'}`);
 	}
 
 	const result = await showClaudeThreeOption(

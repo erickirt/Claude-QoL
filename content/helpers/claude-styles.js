@@ -1057,23 +1057,16 @@ function showMoreActionsModal() {
 }
 
 function findMessageControls(messageElement) {
-	// Check if it's a user message
-	const isUserMessage = messageElement.closest('[data-testid="user-message"]') !== null;
+	// Find the message container (the .group element's parent)
+	const messageContainer = messageElement.closest('.group')?.parentElement;
+	if (!messageContainer) return null;
 
-	if (isUserMessage) {
-		// User message logic
-		const groupEl = messageElement.closest('.group')?.parentElement;
-		if (!groupEl) return null;
+	// Use the aria-label to find the message actions container
+	const actionsGroup = messageContainer.querySelector('[role="group"][aria-label="Message actions"]');
+	if (!actionsGroup) return null;
 
-		return groupEl.querySelector('.justify-between');
-	} else {
-		// Assistant message logic (original code)
-		const group = messageElement.closest('.group')?.parentElement;
-		const buttons = group?.querySelectorAll('button');
-		if (!buttons) return null;
-		const copyButton = group.querySelector('[data-testid="action-bar-copy"]');
-		return copyButton?.closest('.justify-between');
-	}
+	// Return the .justify-between element inside
+	return actionsGroup.querySelector('.justify-between');
 }
 
 // Retrieve all message elements from the UI

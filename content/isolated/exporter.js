@@ -648,7 +648,7 @@
 		}
 		// Replace file references in messages (for phantom storage)
 		// Only replace ClaudeFile/ClaudeCodeExecutionFile - ClaudeAttachment is handled separately
-		for (const msg of tmessages) {
+		for (const msg of messages) {
 			const filesToReplace = msg.files.filter(f => f instanceof ClaudeFile || f instanceof ClaudeCodeExecutionFile);
 			for (const f of filesToReplace) {
 				msg.removeFile(f);
