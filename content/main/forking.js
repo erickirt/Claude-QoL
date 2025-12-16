@@ -212,6 +212,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 
 			const chatName = conversationData.name;
 			const projectUuid = conversationData.project?.uuid || null;
+			pendingFork.sourceSettings = conversationData.settings || {};
 
 			// Fetch existing phantom messages for this conversation
 			const existingPhantoms = await getPhantomMessagesFromMain(conversationId);
@@ -590,9 +591,14 @@ If this is a writing or creative discussion, include sections for characters, pl
 		const newName = `Fork of ${chatName}`;
 		const model = pendingFork.model;
 
-		const conversation = new ClaudeConversation(orgId);
-		const newUuid = await conversation.create(newName, model, projectUuid);
-		await storePhantomMessagesAndWait(newUuid, cleanupMessages(messages, conversation));
+		let conversation = new ClaudeConversation(orgId);
+		await conversation.create(newName, model, projectUuid);
+
+		// Ensure settings match source conversation
+		const { conversation: conv, restoreSettings } = await ensureSettingsState(conversation, pendingFork.sourceSettings);
+		conversation = conv;
+
+		await storePhantomMessagesAndWait(conversation.conversationId, cleanupMessages(messages, conversation));
 
 		// Build the message to send
 		const forkMessage = new ClaudeMessage(conversation);
@@ -625,10 +631,11 @@ If this is a writing or creative discussion, include sections for characters, pl
 		// Figure out why we get redirected before the message is visible
 		// Despite waiting for assistant completion. For now, idk. Maybe add a delay? TODO: Test more.
 		await conversation.sendMessageAndWaitForResponse(forkMessage);
+		await restoreSettings();
 
 		await new Promise(r => setTimeout(r, 5000));
 
-		return { newUuid, failedFiles };
+		return { newUuid: conversation.conversationId, failedFiles };
 	}
 
 	function buildSummaryPrompt(priorSummaryCount, includeAttachments) {

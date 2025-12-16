@@ -730,9 +730,13 @@ class ClaudeMessage {
 		throw new Error('addFile: unsupported input type');
 	}
 
-	removeFile(uuid) {
+	removeFile(fileOrId) {
+		// Accept either a string (uuid/filename) or a file object
+		const id = typeof fileOrId === 'string'
+			? fileOrId
+			: (fileOrId.file_uuid || fileOrId.file_name);
 		this._files = this._files.filter(f =>
-			(f.file_uuid || f.file_name) !== uuid
+			(f.file_uuid || f.file_name) !== id
 		);
 	}
 
@@ -1160,6 +1164,95 @@ async function updateAccountSettings(settings) {
 		throw new Error('Failed to update account settings');
 	}
 	return await response.json();
+}
+
+async function updateAccountSettings(settings) {
+	const response = await fetch('https://claude.ai/api/account/settings', {
+		method: 'PATCH',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify(settings)
+	});
+	if (!response.ok) throw new Error('Failed to update account settings');
+	return await response.json();
+}
+
+/**
+ * Ensures a conversation has the desired settings (artifacts and code execution).
+ * If there's a mismatch, prompts user to cancel, continue anyway, or switch.
+ *
+ * @param {ClaudeConversation} conversation - The newly created conversation
+ * @param {Object} desiredSettings - The desired settings object from source conversation
+ * @returns {Promise<{conversation: ClaudeConversation, restoreSettings: (() => Promise<void>) | null}>}
+ *          conversation: The conversation (same or recreated)
+ *          restoreSettings: Call after first message to restore original account settings (null if not needed)
+ * @throws {Error} USER_CANCELLED if user cancels
+ */
+async function ensureSettingsState(conversation, desiredSettings) {
+	const convData = await conversation.getData();
+	const currentSettings = convData.settings || {};
+
+	// Extract relevant settings (default to false if missing)
+	const desiredArtifacts = desiredSettings?.preview_feature_uses_artifacts === true;
+	const desiredCE = desiredSettings?.enabled_monkeys_in_a_barrel === true;
+	const currentArtifacts = currentSettings.preview_feature_uses_artifacts === true;
+	const currentCE = currentSettings.enabled_monkeys_in_a_barrel === true;
+
+	// Check what differs
+	const artifactsMismatch = desiredArtifacts !== currentArtifacts;
+	const ceMismatch = desiredCE !== currentCE;
+
+	if (!artifactsMismatch && !ceMismatch) {
+		return { conversation, restoreSettings: async () => { } };
+	}
+
+	// Build mismatch description
+	const mismatches = [];
+	if (artifactsMismatch) {
+		mismatches.push(`Artifacts: Originally ${desiredArtifacts ? 'ON' : 'OFF'} → Currently ${currentArtifacts ? 'ON' : 'OFF'}`);
+	}
+	if (ceMismatch) {
+		mismatches.push(`Code Execution: Originally ${desiredCE ? 'ON' : 'OFF'} → Currently ${currentCE ? 'ON' : 'OFF'}`);
+	}
+
+	const result = await showClaudeThreeOption(
+		'Settings Mismatch',
+		`Source conversation has different settings:\n${mismatches.join('\n')}\n\nWhat would you like to do?`,
+		{
+			left: { text: 'Cancel', variant: 'secondary' },
+			middle: { text: 'Continue anyway', variant: 'secondary' },
+			right: { text: 'Switch to match', variant: 'primary' }
+		}
+	);
+
+	if (result === 'left') {
+		await conversation.delete();
+		throw new Error('USER_CANCELLED');
+	}
+
+	if (result === 'right') {
+		await conversation.delete();
+		// Apply desired settings
+		await updateAccountSettings({
+			preview_feature_uses_artifacts: desiredArtifacts,
+			enabled_monkeys_in_a_barrel: desiredCE
+		});
+		// Create new conversation with correct settings (still in "limbo" until first message)
+		const newConversation = new ClaudeConversation(conversation.orgId);
+		await newConversation.create(convData.name, convData.model, convData.project?.uuid);
+		// Return cleanup function - caller must invoke after first message to restore settings
+		return {
+			conversation: newConversation,
+			restoreSettings: async () => {
+				await updateAccountSettings({
+					preview_feature_uses_artifacts: currentArtifacts,
+					enabled_monkeys_in_a_barrel: currentCE
+				});
+			}
+		};
+	}
+
+	// 'middle' - continue anyway
+	return { conversation, restoreSettings: async () => { } };
 }
 
 async function downloadFile(url) {

@@ -296,6 +296,7 @@ function showClaudeThreeOption(title, message, options) {
 	return new Promise((resolve) => {
 		const messageEl = document.createElement('p');
 		messageEl.className = 'text-text-100';
+		messageEl.style.whiteSpace = 'pre-line';
 		messageEl.textContent = message;
 
 		const modal = new ClaudeModal(title, messageEl, false); // Not dismissible

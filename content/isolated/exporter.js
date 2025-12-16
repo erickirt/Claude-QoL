@@ -26,7 +26,8 @@
 
 	//#region Export format handlers
 	function formatTxtExport(conversationData, messages, conversationId) {
-		let output = `Title: ${conversationData.name}\nDate: ${conversationData.updated_at}\n\n`;
+		let output = `Settings: ${JSON.stringify(conversationData.settings || {})}\n`;
+		output += `Title: ${conversationData.name}\nDate: ${conversationData.updated_at}\n\n`;
 
 		for (const message of messages) {
 			// Message boundary
@@ -206,6 +207,17 @@
 		return `${name}-${uuid}${ext}`;
 	}
 
+	function buildAttachmentZipFilename(filename) {
+		const uuid = crypto.randomUUID();
+		const lastDot = filename.lastIndexOf('.');
+		if (lastDot === -1) {
+			return `${filename}-${uuid}_NOEXTRACT`;
+		}
+		const name = filename.substring(0, lastDot);
+		const ext = filename.substring(lastDot);
+		return `${name}-${uuid}_NOEXTRACT${ext}`;
+	}
+
 	async function formatZipExport(conversationData, messages, conversationId, loadingModal) {
 		const zip = new JSZip();
 
@@ -213,12 +225,17 @@
 		const txtContent = formatTxtExport(conversationData, messages, conversationId);
 		zip.file('conversation.txt', txtContent);
 
-		// Collect all downloadable files (ClaudeFile and ClaudeCodeExecutionFile, not ClaudeAttachment)
+		// Collect all downloadable files (ClaudeFile and ClaudeCodeExecutionFile)
 		const allFiles = messages.flatMap(msg =>
 			msg.files.filter(f =>
 				(f instanceof ClaudeFile || f instanceof ClaudeCodeExecutionFile) &&
 				f.getDownloadUrl()
 			)
+		);
+
+		// Collect text attachments (ClaudeAttachment - content is inline, no download needed)
+		const attachments = messages.flatMap(msg =>
+			msg.files.filter(f => f instanceof ClaudeAttachment)
 		);
 
 		// Phase 1: Download all files first
@@ -257,6 +274,12 @@
 
 		for (const file of filesToZipUp) {
 			zip.file(file.name, file.data, { base64: true });
+		}
+
+		// Add text attachments (content is inline, no download needed)
+		for (const attachment of attachments) {
+			const filename = `files/${buildAttachmentZipFilename(attachment.file_name)}`;
+			zip.file(filename, attachment.extracted_content);
 		}
 
 		return await zip.generateAsync({ type: 'blob' });
@@ -321,6 +344,16 @@
 		const warnings = [];
 
 		// Parse header
+		const settingsMatch = text.match(/^Settings: (.+)/m);
+		let settings = null;
+		if (settingsMatch) {
+			try {
+				settings = JSON.parse(settingsMatch[1]);
+			} catch (e) {
+				warnings.push('Failed to parse settings from export header');
+			}
+		}
+
 		const titleMatch = text.match(/^Title: (.+)/m);
 		const title = titleMatch ? titleMatch[1].trim() : 'Imported Conversation';
 
@@ -450,7 +483,7 @@
 			return msg;
 		});
 
-		return { name: title, messages, warnings };
+		return { name: title, messages, warnings, settings };
 	}
 
 	async function parseZipImport(fileOrZip, loadingModal, includeFiles) {
@@ -489,6 +522,11 @@
 			// Build a map of available files in the zip (uuid -> zipEntry)
 			const filesInZip = new Map();
 			zip.folder('files').forEach((relativePath, zipEntry) => {
+				// Skip files marked as no-extract (text attachments for archival only)
+				if (relativePath.includes('_NOEXTRACT')) {
+					return;
+				}
+
 				// UUID is 36 chars, positioned before extension (format: {name}-{uuid}.{ext})
 				const lastDot = relativePath.lastIndexOf('.');
 				const baseName = lastDot === -1 ? relativePath : relativePath.substring(0, lastDot);
@@ -579,10 +617,14 @@
 		});
 	}
 
-	async function finalizeImport(name, messages, model, zipFiles = null, loadingModal = null) {
+	async function finalizeImport(name, messages, model, zipFiles = null, loadingModal = null, settings = null) {
 		// Create the conversation first (needed for correct file upload routing)
-		const conversation = new ClaudeConversation(getOrgId());
+		let conversation = new ClaudeConversation(getOrgId());
 		await conversation.create(name, model);
+
+		// Ensure settings match source (defaults to OFF for old exports without settings)
+		const { conversation: conv, restoreSettings } = await ensureSettingsState(conversation, settings);
+		conversation = conv;
 
 		// Build import message tied to real conversation
 		const importMessage = new ClaudeMessage(conversation);
@@ -605,10 +647,11 @@
 			}
 		}
 		// Replace file references in messages (for phantom storage)
-		for (const msg of messages) {
-			const originalFiles = [...msg.files];
-			msg.clearFiles();
-			for (const f of originalFiles) {
+		// Only replace ClaudeFile/ClaudeCodeExecutionFile - ClaudeAttachment is handled separately
+		for (const msg of tmessages) {
+			const filesToReplace = msg.files.filter(f => f instanceof ClaudeFile || f instanceof ClaudeCodeExecutionFile);
+			for (const f of filesToReplace) {
+				msg.removeFile(f);
 				const newFile = fileMap.get(f);
 				if (newFile) msg.attachFile(newFile);
 			}
@@ -622,7 +665,7 @@
 		// Remove ClaudeAttachments from importMessage - they're inline in chatlog
 		for (const f of [...importMessage.files]) {
 			if (f instanceof ClaudeAttachment) {
-				importMessage.removeFile(f.file_name);
+				importMessage.removeFile(f);
 			}
 		}
 
@@ -635,6 +678,7 @@
 
 		// Send initial message
 		await conversation.sendMessageAndWaitForResponse(importMessage);
+		await restoreSettings();
 
 		// Convert and store phantom messages
 		const phantomMessages = convertToPhantomMessages(messages);
@@ -934,7 +978,7 @@
 			return;
 		}
 
-		let { messages, warnings, name, zipFiles } = parsedData;
+		let { messages, warnings, name, zipFiles, settings } = parsedData;
 
 		// Filter based on toggles using ClaudeMessage methods
 		if (!includeFiles) {
@@ -966,7 +1010,7 @@
 
 		console.log('Parsed import data:', { name, messages, zipFiles });
 		try {
-			await finalizeImport(name, messages, model, zipFiles, loadingModal);
+			await finalizeImport(name, messages, model, zipFiles, loadingModal, settings);
 			// Navigation happens in finalizeImport, loading modal cleaned up automatically
 		} catch (error) {
 			console.error('Import failed:', error);

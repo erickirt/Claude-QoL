@@ -476,8 +476,8 @@
 	function handleRemoveFile(element, file) {
 		element.remove();
 		fileElementMap.delete(element);
-		// ClaudeFile/ClaudeCodeExecutionFile have file_uuid, ClaudeAttachment has file_name
-		editMessage.removeFile(file.file_uuid || file.file_name);
+
+		editMessage.removeFile(file);
 	}
 
 	function buildAttachmentItem(attachment) {
