@@ -1231,7 +1231,7 @@
 		// Import note
 		const note = document.createElement('p');
 		note.className = CLAUDE_CLASSES.TEXT_SM + ' text-text-400';
-		note.textContent = 'Imports txt/zip/JSON (from this modal) and LibreChat JSON.';
+		note.textContent = 'Imports zip (from this modal) and LibreChat JSON.';
 		content.appendChild(note);
 
 		// Import button handler
