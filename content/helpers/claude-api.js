@@ -595,7 +595,8 @@ class ClaudeMessage {
 
 		// Completion-specific (defaults)
 		this.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-		this.locale = navigator.language || 'en-US';
+		this.locale = ['en-US', 'de-DE', 'fr-FR', 'ko-KR', 'ja-JP', 'es-419', 'es-ES', 'it-IT', 'hi-IN', 'pt-BR', 'id-ID'].includes(navigator.language) ? navigator.language : 'en-US';
+
 		this.model = null;
 		this.tools = [];
 		this.personalized_styles = [];
