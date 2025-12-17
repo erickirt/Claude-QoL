@@ -725,6 +725,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 		const summaryMessage = new ClaudeMessage(tempConversation);
 		summaryMessage.text = buildSummaryPrompt(priorSummaryTexts.length, includeAttachments);
 		summaryMessage.sender = 'human';
+		summaryMessage.model = FAST_MODEL;
 
 		// Add prior summary attachments (conversation metadata - force inline)
 		for (let i = 0; i < priorSummaryTexts.length; i++) {
@@ -1237,7 +1238,7 @@ ${editPrompt}
 
 Provide the complete rewritten summary.`;
 					rewriteMessage.sender = 'human';
-
+					rewriteMessage.model = FAST_MODEL;
 					// Add previous summary attachments (conversation metadata - force inline)
 					for (const att of previousSummaryAttachments) {
 						await rewriteMessage.addFile(att.extracted_content, att.file_name, true);
