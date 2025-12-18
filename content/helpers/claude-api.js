@@ -1188,7 +1188,11 @@ class ClaudeProject {
 }
 
 
-// Account settings management
+/**
+ * Fetches account settings from the API.
+ * WARNING: Only LIMITED settings are returned (artifacts, code execution).
+ * To get complete settings, use conversation.getData().settings instead.
+ */
 async function getAccountSettings() {
 	const response = await fetch('/api/account');
 	if (!response.ok) {
@@ -1197,18 +1201,12 @@ async function getAccountSettings() {
 	return await response.json();
 }
 
-async function updateAccountSettings(settings) {
-	const response = await fetch('/api/account', {
-		method: 'PUT',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ settings })
-	});
-	if (!response.ok) {
-		throw new Error('Failed to update account settings');
-	}
-	return await response.json();
-}
-
+/**
+ * Updates account settings via the API (PATCH).
+ * Can modify ALL settings (not just the limited ones returned by getAccountSettings).
+ * Changes are account-wide and affect all new conversations until changed again.
+ * @param {Object} settings - Settings to update
+ */
 async function updateAccountSettings(settings) {
 	const response = await fetch('https://claude.ai/api/account/settings', {
 		method: 'PATCH',
@@ -1225,12 +1223,15 @@ async function updateAccountSettings(settings) {
  *
  * @param {ClaudeConversation} conversation - The newly created conversation
  * @param {Object} desiredSettings - The desired settings object from source conversation
+ * @param {boolean} forceSwitch - If true, skip user prompt and always switch to desired settings
  * @returns {Promise<{conversation: ClaudeConversation, restoreSettings: (() => Promise<void>) | null}>}
  *          conversation: The conversation (same or recreated)
  *          restoreSettings: Call after first message to restore original account settings (null if not needed)
- * @throws {Error} USER_CANCELLED if user cancels
+ * @throws {Error} USER_CANCELLED if user cancels (only when forceSwitch is false)
  */
-async function ensureSettingsState(conversation, desiredSettings) {
+// Notable gotcha: A conversation which has no messages will continue to exist in "limbo" until the first message is sent, changing settings to match the account-wide ones.
+// This is why delaying the restoreSettings call until after the first message is important.
+async function ensureSettingsState(conversation, desiredSettings, forceSwitch = false) {
 	const convData = await conversation.getData();
 	const currentSettings = convData.settings || {};
 
@@ -1244,58 +1245,62 @@ async function ensureSettingsState(conversation, desiredSettings) {
 	const artifactsMismatch = desiredArtifacts !== currentArtifacts;
 	const ceMismatch = desiredCE !== currentCE;
 
-	if (!artifactsMismatch && !ceMismatch) {
+	// If not forcing and no mismatch, return early
+	if (!forceSwitch && !artifactsMismatch && !ceMismatch) {
 		return { conversation, restoreSettings: async () => { } };
 	}
 
-	// Build mismatch description
-	const mismatches = [];
-	if (artifactsMismatch) {
-		mismatches.push(`Artifacts: Originally ${desiredArtifacts ? 'ON' : 'OFF'} | Currently ${currentArtifacts ? 'ON' : 'OFF'}`);
-	}
-	if (ceMismatch) {
-		mismatches.push(`Code Execution: Originally ${desiredCE ? 'ON' : 'OFF'} | Currently ${currentCE ? 'ON' : 'OFF'}`);
-	}
-
-	const result = await showClaudeThreeOption(
-		'Settings Mismatch',
-		`Source conversation has different settings:\n${mismatches.join('\n')}\n\nWhat would you like to do?`,
-		{
-			left: { text: 'Cancel', variant: 'secondary' },
-			middle: { text: 'Continue anyway', variant: 'secondary' },
-			right: { text: 'Switch to match', variant: 'primary' }
+	// If not forcing, prompt user for action
+	if (!forceSwitch) {
+		// Build mismatch description
+		const mismatches = [];
+		if (artifactsMismatch) {
+			mismatches.push(`Artifacts: Originally ${desiredArtifacts ? 'ON' : 'OFF'} | Currently ${currentArtifacts ? 'ON' : 'OFF'}`);
 		}
-	);
+		if (ceMismatch) {
+			mismatches.push(`Code Execution: Originally ${desiredCE ? 'ON' : 'OFF'} | Currently ${currentCE ? 'ON' : 'OFF'}`);
+		}
 
-	if (result === 'left') {
-		await conversation.delete();
-		throw new Error('USER_CANCELLED');
-	}
-
-	if (result === 'right') {
-		await conversation.delete();
-		// Apply desired settings
-		await updateAccountSettings({
-			preview_feature_uses_artifacts: desiredArtifacts,
-			enabled_monkeys_in_a_barrel: desiredCE
-		});
-		// Create new conversation with correct settings (still in "limbo" until first message)
-		const newConversation = new ClaudeConversation(conversation.orgId);
-		await newConversation.create(convData.name, convData.model, convData.project?.uuid);
-		// Return cleanup function - caller must invoke after first message to restore settings
-		return {
-			conversation: newConversation,
-			restoreSettings: async () => {
-				await updateAccountSettings({
-					preview_feature_uses_artifacts: currentArtifacts,
-					enabled_monkeys_in_a_barrel: currentCE
-				});
+		const result = await showClaudeThreeOption(
+			'Settings Mismatch',
+			`Source conversation has different settings:\n${mismatches.join('\n')}\n\nWhat would you like to do?`,
+			{
+				left: { text: 'Cancel', variant: 'secondary' },
+				middle: { text: 'Continue anyway', variant: 'secondary' },
+				right: { text: 'Switch to match', variant: 'primary' }
 			}
-		};
+		);
+
+		if (result === 'left') {
+			await conversation.delete();
+			throw new Error('USER_CANCELLED');
+		}
+
+		if (result === 'middle') {
+			return { conversation, restoreSettings: async () => { } };
+		}
+		// result === 'right' falls through to switch logic below
 	}
 
-	// 'middle' - continue anyway
-	return { conversation, restoreSettings: async () => { } };
+	// Switch logic: delete conversation, apply settings, recreate
+	await conversation.delete();
+	await updateAccountSettings({
+		preview_feature_uses_artifacts: desiredArtifacts,
+		enabled_monkeys_in_a_barrel: desiredCE
+	});
+	// Create new conversation with correct settings (still in "limbo" until first message)
+	const newConversation = new ClaudeConversation(conversation.orgId);
+	await newConversation.create(convData.name, convData.model, convData.project?.uuid);
+	// Return cleanup function - caller must invoke after first message to restore settings
+	return {
+		conversation: newConversation,
+		restoreSettings: async () => {
+			await updateAccountSettings({
+				preview_feature_uses_artifacts: currentArtifacts,
+				enabled_monkeys_in_a_barrel: currentCE
+			});
+		}
+	};
 }
 
 async function downloadFile(url) {

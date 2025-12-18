@@ -947,6 +947,13 @@ If this is a writing or creative discussion, include sections for characters, pl
 		const tempConversation = new ClaudeConversation(orgId);
 		await tempConversation.create(summaryConvoName, FAST_MODEL, null);
 
+		// Force disable artifacts and code execution for text-only summaries
+		const { conversation: summaryConv, restoreSettings } = await ensureSettingsState(
+			tempConversation,
+			{ preview_feature_uses_artifacts: false, enabled_monkeys_in_a_barrel: false },
+			true  // forceSwitch
+		);
+
 		try {
 			// ===== PHASE 1: Calculate chunk boundaries (work backwards) =====
 			const chunks = calculateChunkBoundaries(messages);
@@ -954,14 +961,18 @@ If this is a writing or creative discussion, include sections for characters, pl
 			// ===== PHASE 2: Generate summaries (work forwards) =====
 			const summaryTexts = [];
 			let processedTokens = 0;
-
+			let settingsRestored = false;
 			for (const chunk of chunks) {
 				processedTokens += estimateTokens(chunk);
 				const summaryText = await generateSummaryForChunk(
-					tempConversation,
+					summaryConv,
 					chunk,
 					summaryTexts
 				);
+				if (!settingsRestored) {
+					await restoreSettings();
+					settingsRestored = true;
+				}
 
 				if (pendingFork.loadingModal) {
 					pendingFork.loadingModal.setContent(
@@ -973,7 +984,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 			}
 
 			// ===== PHASE 2.5: User review/edit summaries =====
-			const editedSummaryTexts = await showSummaryEditModal(summaryTexts, chunks, tempConversation);
+			const editedSummaryTexts = await showSummaryEditModal(summaryTexts, chunks, summaryConv);
 
 			// ===== PHASE 3: Create synthetic ClaudeMessage pairs =====
 			const syntheticMessages = [];
@@ -987,7 +998,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 				const parentUuid = syntheticMessages.at(-1)?.uuid ?? "00000000-0000-4000-8000-000000000000";
 
 				// Create user message as ClaudeMessage
-				const userMessage = new ClaudeMessage(tempConversation);
+				const userMessage = new ClaudeMessage(summaryConv);
 				userMessage.uuid = crypto.randomUUID();
 				userMessage.parent_message_uuid = parentUuid;
 				userMessage.sender = 'human';
@@ -1005,7 +1016,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 				}
 
 				// Create assistant message as ClaudeMessage
-				const assistantMessage = new ClaudeMessage(tempConversation);
+				const assistantMessage = new ClaudeMessage(summaryConv);
 				assistantMessage.uuid = crypto.randomUUID();
 				assistantMessage.parent_message_uuid = userMessage.uuid;
 				assistantMessage.sender = 'assistant';
@@ -1024,7 +1035,8 @@ If this is a writing or creative discussion, include sections for characters, pl
 			console.log('Generated synthetic summary messages:', syntheticMessages.map(m => m.toHistoryJSON()));
 			return syntheticMessages;
 		} finally {
-			await tempConversation.delete();
+			await summaryConv.delete();
+			await restoreSettings(); // Just in case
 		}
 	}
 
