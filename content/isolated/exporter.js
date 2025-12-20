@@ -137,7 +137,6 @@
 
 			// Build content array with only think and text types
 			const content = [];
-
 			for (const item of msg.content) {
 				if (item.type === 'thinking') {
 					content.push({
@@ -153,6 +152,7 @@
 				// Skip all other types (tool_use, tool_result, etc.)
 			}
 
+
 			// Prepend attachment text to first text block (for user messages)
 			if (attachmentText) {
 				const firstTextIndex = content.findIndex(c => c.type === 'text');
@@ -164,6 +164,7 @@
 				}
 			}
 
+
 			const message = {
 				messageId: msg.uuid,
 				parentMessageId: msg.parent_message_uuid === "00000000-0000-4000-8000-000000000000"
@@ -172,7 +173,8 @@
 				content: content,
 				sender: msg.sender === ROLES.ASSISTANT.apiName ? ROLES.ASSISTANT.librechatName : ROLES.USER.librechatName,
 				isCreatedByUser: msg.sender === ROLES.USER.apiName,
-				createdAt: msg.created_at
+				createdAt: msg.created_at,
+				text: content.filter(c => c.type === 'text').map(c => c.text).join('\n'),
 			};
 
 			if (files.length > 0) {
