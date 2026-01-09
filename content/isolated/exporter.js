@@ -67,7 +67,7 @@
 		return output;
 	}
 
-	function formatMdExport(conversationData, messages, conversationId) {
+	function formatMdExport(conversationData, messages, conversationId, includeThinking = true) {
 		let output = `# ${conversationData.name}\n\n`;
 
 		for (const message of messages) {
@@ -76,6 +76,7 @@
 
 			for (const content of message.content) {
 				if (content.type === 'thinking') {
+					if (!includeThinking) continue;
 					// Use last summary if available, fallback to "Thinking"
 					let summaryText = 'Thinking';
 					if (content.summaries && content.summaries.length > 0) {
@@ -288,12 +289,12 @@
 	}
 	//#endregion
 
-	async function formatExport(conversationData, messages, format, conversationId, loadingModal) {
+	async function formatExport(conversationData, messages, format, conversationId, loadingModal, options = {}) {
 		switch (format) {
 			case 'txt':
 				return formatTxtExport(conversationData, messages, conversationId);
 			case 'md':
-				return formatMdExport(conversationData, messages, conversationId);
+				return formatMdExport(conversationData, messages, conversationId, options.includeThinking);
 			case 'jsonl':
 				return formatJsonlExport(conversationData, messages, conversationId);
 			case 'librechat':
@@ -1098,7 +1099,7 @@
 		const content = document.createElement('div');
 
 		// Variables to hold references (may not be created)
-		let formatSelect, toggleInput;
+		let formatSelect, toggleInput, thinkingToggleInput;
 
 		//#region Export section (only if in conversation)
 		if (isInConversation) {
@@ -1139,14 +1140,26 @@
 			treeOption.appendChild(toggleContainer);
 			content.appendChild(treeOption);
 
-			// Show/hide tree option based on initial value
+			// Thinking option container (for markdown export)
+			const thinkingOption = document.createElement('div');
+			thinkingOption.id = 'thinkingOption';
+			thinkingOption.className = 'mb-4 hidden';
+
+			const { container: thinkingToggleContainer, input: thinkingInput } = createClaudeToggle('Include thinking', false);
+			thinkingToggleInput = thinkingInput;
+			thinkingOption.appendChild(thinkingToggleContainer);
+			content.appendChild(thinkingOption);
+
+			// Show/hide options based on initial value
 			const initialFormat = lastFormat.split('_')[0];
 			treeOption.classList.toggle('hidden', !['librechat', 'raw'].includes(initialFormat));
+			thinkingOption.classList.toggle('hidden', initialFormat !== 'md');
 
-			// Update tree option visibility on select change
+			// Update option visibility on select change
 			formatSelect.onchange = () => {
 				const format = formatSelect.value.split('_')[0];
 				treeOption.classList.toggle('hidden', !['librechat', 'raw'].includes(format));
+				thinkingOption.classList.toggle('hidden', format !== 'md');
 			};
 
 			// Export button handler
@@ -1168,7 +1181,10 @@
 					const messages = await conversation.getMessages(exportTree);
 
 					const filename = `Claude_export_${conversationData.name}_${conversationId}.${extension}`;
-					const exportContent = await formatExport(conversationData, messages, format, conversationId, loadingModal);
+					const exportOptions = {
+						includeThinking: thinkingToggleInput?.checked ?? true
+					};
+					const exportContent = await formatExport(conversationData, messages, format, conversationId, loadingModal, exportOptions);
 
 					// Handle blob vs string content
 					const blob = exportContent instanceof Blob
