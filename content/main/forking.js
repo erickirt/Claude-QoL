@@ -11,7 +11,8 @@ If this is a writing or creative discussion, include sections for characters, pl
 		includeAttachments: true,
 		rawTextPercentage: 100,
 		summaryPrompt: defaultSummaryPrompt,
-		originalSettings: null
+		originalSettings: null,
+		useSelectedModelForSummary: false
 	};
 	const LAST_CHUNK_SIZE = 15000;     // Reserved for end (guaranteed recency bias)
 	const MAIN_TARGET_CHUNK = 30000;   // Target for front chunks
@@ -97,6 +98,17 @@ If this is a writing or creative discussion, include sections for characters, pl
 		summaryPromptContainer.appendChild(promptInput);
 
 		rawTextContainer.appendChild(summaryPromptContainer);
+
+		// Use selected model for summarization toggle
+		const useSelectedModelContainer = document.createElement('div');
+		useSelectedModelContainer.id = 'useSelectedModelContainer';
+		useSelectedModelContainer.style.display = rawTextSlider.input.value < 100 ? 'block' : 'none';
+		useSelectedModelContainer.className = 'mt-2';
+		const useSelectedModelToggle = createClaudeToggle('Use above model for summarization instead of Haiku', false);
+		useSelectedModelToggle.input.id = 'useSelectedModelForSummary';
+		useSelectedModelContainer.appendChild(useSelectedModelToggle.container);
+		rawTextContainer.appendChild(useSelectedModelContainer);
+
 		content.appendChild(rawTextContainer);
 
 		// Include files toggle
@@ -134,6 +146,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 		function updateSubToggleVisibility() {
 			const isSummarizing = rawTextSlider.input.value < 100;
 			summaryPromptContainer.style.display = isSummarizing ? 'block' : 'none';
+			useSelectedModelContainer.style.display = isSummarizing ? 'block' : 'none';
 
 			keepFilesFromSummarizedToggle.container.style.display =
 				(includeFilesToggle.input.checked && isSummarizing) ? 'flex' : 'none';
@@ -167,6 +180,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 			pendingFork.includeToolCalls = includeToolCallsToggle.input.checked;
 			pendingFork.keepFilesFromSummarized = keepFilesFromSummarizedToggle.input.checked;
 			pendingFork.keepToolCallsFromSummarized = keepToolCallsFromSummarizedToggle.input.checked;
+			pendingFork.useSelectedModelForSummary = useSelectedModelToggle.input.checked;
 
 			modal.destroy();
 			await forkConversationClicked(messageUuid); // Pass UUID directly
@@ -381,7 +395,8 @@ If this is a writing or creative discussion, include sections for characters, pl
 				rawTextPercentage: 100,
 				summaryPrompt: defaultSummaryPrompt,
 				originalSettings: null,
-				loadingModal: null
+				loadingModal: null,
+				useSelectedModelForSummary: false
 			};
 		}
 	}
@@ -725,7 +740,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 		const summaryMessage = new ClaudeMessage(tempConversation);
 		summaryMessage.text = buildSummaryPrompt(priorSummaryTexts.length, includeAttachments);
 		summaryMessage.sender = 'human';
-		summaryMessage.model = FAST_MODEL;
+		summaryMessage.model = pendingFork.useSelectedModelForSummary ? pendingFork.model : FAST_MODEL;
 
 		// Add prior summary attachments (conversation metadata - force inline)
 		for (let i = 0; i < priorSummaryTexts.length; i++) {
@@ -944,8 +959,9 @@ If this is a writing or creative discussion, include sections for characters, pl
 
 		// Create temp conversation
 		const summaryConvoName = `Temp_Summary_${Date.now()}`;
+		const summaryModel = pendingFork.useSelectedModelForSummary ? pendingFork.model : FAST_MODEL;
 		const tempConversation = new ClaudeConversation(orgId);
-		await tempConversation.create(summaryConvoName, FAST_MODEL, null);
+		await tempConversation.create(summaryConvoName, summaryModel, null);
 
 		// Force disable artifacts and code execution for text-only summaries
 		const { conversation: summaryConv, restoreSettings } = await ensureSettingsState(
@@ -1250,7 +1266,7 @@ ${editPrompt}
 
 Provide the complete rewritten summary.`;
 					rewriteMessage.sender = 'human';
-					rewriteMessage.model = FAST_MODEL;
+					rewriteMessage.model = pendingFork.useSelectedModelForSummary ? pendingFork.model : FAST_MODEL;
 					// Add previous summary attachments (conversation metadata - force inline)
 					for (const att of previousSummaryAttachments) {
 						await rewriteMessage.addFile(att.extracted_content, att.file_name, true);
