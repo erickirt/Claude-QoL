@@ -787,6 +787,26 @@
 	//#endregion
 
 	//#region LibreChat JSON import
+	function extractEmbeddedAttachments(text) {
+		const attachments = [];
+		const attachmentPattern = /\n*=====ATTACHMENT_BEGIN: (.+?)=====\n([\s\S]*?)\n=====ATTACHMENT_END=====/g;
+		
+		let match;
+		while ((match = attachmentPattern.exec(text)) !== null) {
+			const fileName = match[1];
+			const content = match[2];
+			
+			attachments.push({
+				file_name: fileName,
+				extracted_content: content,
+				file_size: content.length,
+				file_type: 'text/plain'
+			});
+		}
+		
+		return attachments;
+	}
+	
 	function parseLibrechatJson(jsonText) {
 		const data = JSON.parse(jsonText);
 		const warnings = [];
@@ -825,24 +845,44 @@
 			msg.created_at = raw.createdAt;
 
 			// Convert files to attachments (text-based files only)
-			if (raw.files && Array.isArray(raw.files)) {
+			const attachmentsToAdd = [];
+			
+			// First, check files array
+			if (raw.files && Array.isArray(raw.files) && raw.files.length > 0) {
 				for (const file of raw.files) {
 					if (file.text) {
-						// Transform LibreChat format to attachment API format
-						const attData = {
+						attachmentsToAdd.push({
 							extracted_content: file.text,
 							file_name: file.name || 'unknown',
 							file_size: file.bytes || file.text.length,
 							file_type: file.type || 'text/plain'
-						};
-						msg.attachFile(parseFileFromAPI(attData, conversation));
+						});
 					}
 				}
+			} else {
+				// If no files in array, check for embedded attachments in text
+				const textContent = raw.text || '';
+				const embeddedAttachments = extractEmbeddedAttachments(textContent);
+				attachmentsToAdd.push(...embeddedAttachments);
+				
+				// Also check content array
+				if (raw.content && Array.isArray(raw.content)) {
+					for (const block of raw.content) {
+						if (block.type === 'text' && block.text) {
+							const embedded = extractEmbeddedAttachments(block.text);
+							attachmentsToAdd.push(...embedded);
+						}
+					}
+				}
+			}
+			
+			// Add all attachments to message
+			for (const attData of attachmentsToAdd) {
+				msg.attachFile(parseFileFromAPI(attData, conversation));
 			}
 
 			return msg;
 		});
-
 		// Ensure conversation starts with user message
 		if (messages.length > 0 && messages[0].sender !== ROLES.USER.apiName) {
 			warnings.push('Conversation did not start with a user message. A placeholder was added.');
