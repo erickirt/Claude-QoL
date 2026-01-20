@@ -1058,7 +1058,7 @@ function showMoreActionsModal() {
 
 function findMessageControls(messageElement) {
 	// Find the message container (the .group element's parent)
-	const messageContainer = messageElement.closest('.group')?.parentElement;
+	const messageContainer = messageElement.closest('.group')?.parentElement?.parentElement;
 	if (!messageContainer) return null;
 
 	// Use the aria-label to find the message actions container
@@ -1097,7 +1097,7 @@ function addAssistantMessageButtonWithPriority(buttonGenerator, buttonClass) {
 		'bookmark-button'
 	];
 
-	const messages = document.querySelectorAll('.font-claude-response');
+	const messages = getUIMessages().assistantMessages;
 	messages.forEach((message) => {
 		const container = findMessageControls(message);
 		if (!container) {

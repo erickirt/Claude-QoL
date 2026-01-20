@@ -368,7 +368,7 @@ function extractAndStoreUUIDs() {
 				const uuid = textContent.substring(uuidStart, uuidEnd);
 
 				// Put UUID on parent container instead of the message element itself
-				const parentContainer = container?.parentElement?.parentElement;
+				const parentContainer = container?.parentElement?.parentElement?.parentElement;
 				if (parentContainer) {
 					parentContainer.setAttribute('data-message-uuid', uuid);
 				}
