@@ -4,7 +4,7 @@ This extension adds a bunch of QOL/Utility features to claude.ai, like Search, N
 
 Available on:
 - [Firefox (Desktop+Mobile)](https://addons.mozilla.org/en-US/firefox/addon/claude-qol/)
-- [Chrome](https://chromewebstore.google.com/detail/claude-toolbox/dkdnancajokhfclpjpplkhlkbhaeejob)
+- [Chrome](https://chromewebstore.google.com/detail/claude-qol/dkdnancajokhfclpjpplkhlkbhaeejob)
 - The desktop client - Via [Claude-WebExtension-Launcher](https://github.com/lugia19/Claude-WebExtension-Launcher)
 
 # Features

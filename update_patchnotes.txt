@@ -1,0 +1,3 @@
+Added version update notifications
+Added STT/TTS base url options for OAI-compatible APIs
+Added ability to view phantom messages on other devices

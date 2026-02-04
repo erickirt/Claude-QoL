@@ -5,3 +5,4 @@ web-ext-artifacts
 CLAUDE.md
 content/helpers/tts-providers.js
 icon-v2.psd
+.claude/*
