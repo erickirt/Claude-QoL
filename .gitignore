@@ -2,3 +2,6 @@ manifest.json
 userscripts/UNUSED-claude-tree.user.js
 web-ext-artifacts
 .vscode
+CLAUDE.md
+content/helpers/tts-providers.js
+icon-v2.psd

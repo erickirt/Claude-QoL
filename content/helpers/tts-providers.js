@@ -642,6 +642,8 @@ JSON array:`;
 
 	//#region OpenAI Provider
 	class OpenAIProvider extends Provider {
+		static DEFAULT_BASE_URL = 'https://api.openai.com';
+
 		constructor(onStateChange = null) {
 			super(onStateChange);
 			if (onStateChange) {
@@ -671,9 +673,10 @@ JSON array:`;
 			];
 		}
 
-		async testApiKey(apiKey) {
+		async testApiKey(apiKey, baseUrl = '') {
+			const base = baseUrl || OpenAIProvider.DEFAULT_BASE_URL;
 			try {
-				const response = await fetch('https://api.openai.com/v1/models', {
+				const response = await fetch(`${base}/v1/models`, {
 					headers: {
 						'Authorization': `Bearer ${apiKey}`
 					}
@@ -754,6 +757,7 @@ JSON array:`;
 		}
 
 		async streamText(text, voiceId, modelId, apiKey, extra = {}) {
+			const baseUrl = extra.baseUrl || OpenAIProvider.DEFAULT_BASE_URL;
 			const body = {
 				input: text,
 				model: modelId,
@@ -766,7 +770,7 @@ JSON array:`;
 				body.instructions = extra.instructions;
 			}
 
-			const response = await fetch('https://api.openai.com/v1/audio/speech', {
+			const response = await fetch(`${baseUrl}/v1/audio/speech`, {
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/json',
@@ -827,14 +831,14 @@ JSON array:`;
 			return chunks;
 		}
 
-		async play(text, voice, model, apiKey) {
+		async play(text, voice, model, apiKey, baseUrl = '') {
 			await streamingPlaybackManager.startSession();
 
 			const chunks = this.chunkText(text, 4096);
 
 			for (const chunk of chunks) {
 				streamingPlaybackManager.queue(
-					async () => this.streamText(chunk, voice, model, apiKey)
+					async () => this.streamText(chunk, voice, model, apiKey, { baseUrl })
 				);
 			}
 

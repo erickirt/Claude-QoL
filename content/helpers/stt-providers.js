@@ -147,16 +147,20 @@
 
 	// ======== OPENAI PROVIDER ========
 	class OpenAISTTProvider extends STTProvider {
-		constructor(apiKey) {
+		static DEFAULT_BASE_URL = 'https://api.openai.com';
+
+		constructor(apiKey, baseUrl = '') {
 			super(apiKey);
+			this.baseUrl = baseUrl || OpenAISTTProvider.DEFAULT_BASE_URL;
 			this.mediaRecorder = null;
 			this.audioChunks = [];
 			this.audioStream = null;
 		}
 
-		static async validateApiKey(apiKey) {
+		static async validateApiKey(apiKey, baseUrl = '') {
+			const base = baseUrl || OpenAISTTProvider.DEFAULT_BASE_URL;
 			try {
-				const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+				const response = await fetch(`${base}/v1/audio/transcriptions`, {
 					method: 'POST',
 					headers: {
 						'Authorization': `Bearer ${apiKey}`
@@ -236,7 +240,7 @@
 			formData.append('model', 'gpt-4o-mini-transcribe');
 			formData.append('response_format', 'text');
 
-			const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+			const response = await fetch(`${this.baseUrl}/v1/audio/transcriptions`, {
 				method: 'POST',
 				headers: {
 					'Authorization': `Bearer ${this.apiKey}`

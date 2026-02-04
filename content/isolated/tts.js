@@ -82,9 +82,12 @@
 		const voiceOverride = voiceResult[`chatVoice_${conversationId}`] || '';
 		const defaultVoiceId = voiceOverride || settings.voice;
 
+		// Get baseUrl for OpenAI provider
+		const baseUrl = settings.openaiBaseUrl || '';
+
 		if (!actorModeEnabled) {
 			// Actor mode not enabled - use regular voice
-			return ttsProvider.play(text, defaultVoiceId, settings.model, settings.apiKey);
+			return ttsProvider.play(text, defaultVoiceId, settings.model, settings.apiKey, baseUrl);
 		}
 
 		// Actor mode is enabled - get character configurations
@@ -93,7 +96,7 @@
 
 		if (characters.length === 0) {
 			console.log('Actor mode enabled but no characters configured, using default voice');
-			return ttsProvider.play(text, defaultVoiceId, settings.model, settings.apiKey);
+			return ttsProvider.play(text, defaultVoiceId, settings.model, settings.apiKey, baseUrl);
 		}
 
 		try {
@@ -178,7 +181,7 @@
 					voice,
 					settings.model,
 					settings.apiKey,
-					segment.extra
+					{ ...segment.extra, baseUrl }
 				);
 			}
 
@@ -187,7 +190,7 @@
 
 		} catch (error) {
 			console.error('Actor mode failed, falling back to regular playback:', error);
-			return ttsProvider.play(text, defaultVoiceId, settings.model, settings.apiKey);
+			return ttsProvider.play(text, defaultVoiceId, settings.model, settings.apiKey, baseUrl);
 		}
 	}
 	//#endregion
@@ -563,6 +566,28 @@
 			apiKeySection.appendChild(apiKeyInput);
 			content.appendChild(apiKeySection);
 
+			// Base URL input (for OpenAI-compatible APIs)
+			const baseUrlSection = document.createElement('div');
+			baseUrlSection.className = 'mb-4';
+			baseUrlSection.id = 'baseUrlSection';
+			baseUrlSection.style.display = settings.provider === 'openai' ? 'block' : 'none';
+			const baseUrlLabel = document.createElement('label');
+			baseUrlLabel.className = CLAUDE_CLASSES.LABEL;
+			baseUrlLabel.textContent = 'Base URL (optional)';
+			baseUrlSection.appendChild(baseUrlLabel);
+			const baseUrlInput = createClaudeInput({
+				type: 'text',
+				value: settings.openaiBaseUrl || '',
+				placeholder: 'https://api.openai.com'
+			});
+			baseUrlInput.id = 'baseUrlInput';
+			baseUrlSection.appendChild(baseUrlInput);
+			const baseUrlHint = document.createElement('p');
+			baseUrlHint.className = 'text-text-500 text-xs mt-1';
+			baseUrlHint.textContent = 'For OpenAI-compatible APIs (LocalAI, vLLM, etc.)';
+			baseUrlSection.appendChild(baseUrlHint);
+			content.appendChild(baseUrlSection);
+
 			// Voice select
 			const voiceSection = document.createElement('div');
 			voiceSection.className = 'mb-4';
@@ -675,14 +700,18 @@
 					apiKey: apiKeyInput.value.trim(),
 					voice: voiceSelect.value,
 					model: modelSelect.value,
-					autoSpeak: autoSpeakToggle.input.checked
+					autoSpeak: autoSpeakToggle.input.checked,
+					openaiBaseUrl: baseUrlInput.value.trim().replace(/\/+$/, '')  // Strip trailing slashes
 				};
 
 				// Verify API key if provider requires it
 				const providerInfo = window.TTSProviders.TTS_PROVIDERS[newSettings.provider];
 				if (providerInfo.requiresApiKey && newSettings.apiKey) {
 					const tempProvider = initializeProvider(newSettings.provider, null);
-					const isValid = await tempProvider.testApiKey(newSettings.apiKey);
+					// Pass baseUrl for OpenAI provider
+					const isValid = newSettings.provider === 'openai'
+						? await tempProvider.testApiKey(newSettings.apiKey, newSettings.openaiBaseUrl)
+						: await tempProvider.testApiKey(newSettings.apiKey);
 
 					if (!isValid) {
 						showClaudeAlert('API Key Error', `Invalid ${providerInfo.name} API key. Please check your key and try again.`);
@@ -771,6 +800,9 @@
 				// Show/hide API key section
 				apiKeySection.style.display = newProviderInfo.requiresApiKey ? 'block' : 'none';
 
+				// Show/hide base URL section (only for OpenAI)
+				baseUrlSection.style.display = newProviderKey === 'openai' ? 'block' : 'none';
+
 				const tempProvider = initializeProvider(newProviderKey, null);
 
 				// Check if we need to load data
@@ -833,7 +865,10 @@
 					loadingModal.show();
 
 					const tempProvider = initializeProvider(currentProviderKey, null);
-					const isValid = await tempProvider.testApiKey(newKey);
+					const currentBaseUrl = baseUrlInput.value.trim().replace(/\/+$/, '');
+					const isValid = currentProviderKey === 'openai'
+						? await tempProvider.testApiKey(newKey, currentBaseUrl)
+						: await tempProvider.testApiKey(newKey);
 					if (isValid) {
 						const [newVoices, newModels] = await Promise.all([
 							tempProvider.getVoices(newKey),
@@ -1114,7 +1149,8 @@
 			'tts_apiKey',
 			'tts_voice',
 			'tts_model',
-			'tts_autoSpeak'
+			'tts_autoSpeak',
+			'openai_tts_base_url'
 		]);
 
 		return {
@@ -1123,7 +1159,8 @@
 			apiKey: result.tts_apiKey || '',
 			voice: result.tts_voice || '',
 			model: result.tts_model || 'eleven_flash_v2_5',	// Default to 11labs fast model
-			autoSpeak: result.tts_autoSpeak || false
+			autoSpeak: result.tts_autoSpeak || false,
+			openaiBaseUrl: result.openai_tts_base_url || ''
 		};
 	}
 
@@ -1134,7 +1171,8 @@
 			'tts_apiKey': settings.apiKey,
 			'tts_voice': settings.voice,
 			'tts_model': settings.model,
-			'tts_autoSpeak': settings.autoSpeak
+			'tts_autoSpeak': settings.autoSpeak,
+			'openai_tts_base_url': settings.openaiBaseUrl
 		});
 	}
 

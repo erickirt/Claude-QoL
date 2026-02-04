@@ -33,13 +33,15 @@
 			'stt_api_key',
 			'stt_auto_send',
 			'stt_enabled',
-			'stt_audio_device'
+			'stt_audio_device',
+			'openai_stt_base_url'
 		]);
 		const selectedProvider = storage.stt_provider || (BrowserSTTProvider.isAvailable() ? 'browser' : 'groq');
 		const apiKey = storage.stt_api_key || '';
 		const autoSend = storage.stt_auto_send || false;
 		const sttEnabled = storage.stt_enabled || false;
 		const savedAudioDevice = storage.stt_audio_device || 'default';
+		const openaiBaseUrl = storage.openai_stt_base_url || '';
 
 		// Get available audio devices - request permission if needed
 		let audioDevices = [];
@@ -129,18 +131,40 @@
 		apiKeyContainer.appendChild(apiKeyInput);
 		contentDiv.appendChild(apiKeyContainer);
 
-		// Update API key field visibility based on provider
-		function updateApiKeyVisibility() {
-			const provider = STT_PROVIDERS[providerSelect.value];
-			if (provider.requiresApiKey) {
-				apiKeyContainer.style.display = 'block';
-			} else {
-				apiKeyContainer.style.display = 'none';
-			}
-		}
-		updateApiKeyVisibility();
+		// Base URL input (for OpenAI-compatible APIs)
+		const baseUrlContainer = document.createElement('div');
+		baseUrlContainer.className = 'mb-4';
 
-		providerSelect.addEventListener('change', updateApiKeyVisibility);
+		const baseUrlLabel = document.createElement('label');
+		baseUrlLabel.className = CLAUDE_CLASSES.LABEL;
+		baseUrlLabel.textContent = 'Base URL (optional)';
+		baseUrlContainer.appendChild(baseUrlLabel);
+
+		const baseUrlInput = createClaudeInput({
+			type: 'text',
+			placeholder: 'https://api.openai.com',
+			value: openaiBaseUrl
+		});
+		baseUrlInput.id = 'sttBaseUrl';
+		baseUrlContainer.appendChild(baseUrlInput);
+
+		const baseUrlHint = document.createElement('p');
+		baseUrlHint.className = 'text-text-500 text-xs mt-1';
+		baseUrlHint.textContent = 'For OpenAI-compatible APIs (LocalAI, vLLM, etc.)';
+		baseUrlContainer.appendChild(baseUrlHint);
+
+		contentDiv.appendChild(baseUrlContainer);
+
+		// Update API key and base URL field visibility based on provider
+		function updateFieldVisibility() {
+			const providerKey = providerSelect.value;
+			const provider = STT_PROVIDERS[providerKey];
+			apiKeyContainer.style.display = provider.requiresApiKey ? 'block' : 'none';
+			baseUrlContainer.style.display = providerKey === 'openai' ? 'block' : 'none';
+		}
+		updateFieldVisibility();
+
+		providerSelect.addEventListener('change', updateFieldVisibility);
 
 		// Audio Device dropdown
 		const audioDeviceContainer = document.createElement('div');
@@ -197,6 +221,7 @@
 			const newAutoSend = autoSendToggle.input.checked;
 			const newEnabled = sttEnabledToggle.input.checked;
 			const newAudioDevice = audioDeviceSelect.value;
+			const newBaseUrl = baseUrlInput.value.trim().replace(/\/+$/, '');  // Strip trailing slashes
 
 			const provider = STT_PROVIDERS[newProvider];
 
@@ -206,7 +231,10 @@
 				const loadingModal = createLoadingModal('Validating API key...');
 				loadingModal.show();
 
-				const isValid = await provider.class.validateApiKey(newKey);
+				// Pass baseUrl for OpenAI provider
+				const isValid = newProvider === 'openai'
+					? await provider.class.validateApiKey(newKey, newBaseUrl)
+					: await provider.class.validateApiKey(newKey);
 
 				if (!isValid) {
 					loadingModal.destroy();
@@ -222,7 +250,8 @@
 				stt_api_key: newKey,
 				stt_auto_send: newAutoSend,
 				stt_enabled: newEnabled,
-				stt_audio_device: newAudioDevice
+				stt_audio_device: newAudioDevice,
+				openai_stt_base_url: newBaseUrl
 			});
 
 			return true; // Close modal
@@ -234,10 +263,11 @@
 	// ======== RECORDING FUNCTIONS ========
 	async function startRecording() {
 		try {
-			const storage = await chrome.storage.local.get(['stt_provider', 'stt_api_key', 'stt_audio_device']);
+			const storage = await chrome.storage.local.get(['stt_provider', 'stt_api_key', 'stt_audio_device', 'openai_stt_base_url']);
 			const providerKey = storage.stt_provider || (BrowserSTTProvider.isAvailable() ? 'browser' : 'groq');
 			const apiKey = storage.stt_api_key || '';
 			const audioDevice = storage.stt_audio_device || 'default';
+			const openaiBaseUrl = storage.openai_stt_base_url || '';
 
 			const providerConfig = STT_PROVIDERS[providerKey];
 
@@ -251,8 +281,10 @@
 				return;
 			}
 
-			// Instantiate the provider
-			sttProvider = new providerConfig.class(apiKey);
+			// Instantiate the provider (pass baseUrl for OpenAI)
+			sttProvider = providerKey === 'openai'
+				? new providerConfig.class(apiKey, openaiBaseUrl)
+				: new providerConfig.class(apiKey);
 
 			// Start recording
 			await sttProvider.startRecording(audioDevice);
