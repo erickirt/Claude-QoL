@@ -482,9 +482,26 @@
 	}
 
 	async function tryInjectUI() {
-		// Check if already injected
-		if (document.querySelector('.preset-switcher-section')) {
-			return;
+		const existingSection = document.querySelector('.preset-switcher-section');
+
+		// Check if Usage Tracker is present
+		const usageTrackerSection = document.querySelector('.ut-container')?.closest('.flex.flex-col.mb-6');
+
+		if (existingSection) {
+			// If Usage Tracker exists, make sure we're positioned after it
+			if (usageTrackerSection) {
+				const isAfterUsageTracker = usageTrackerSection.compareDocumentPosition(existingSection) & Node.DOCUMENT_POSITION_FOLLOWING;
+				if (!isAfterUsageTracker) {
+					// We're before Usage Tracker, need to re-inject
+					existingSection.remove();
+				} else {
+					// Correctly positioned, nothing to do
+					return;
+				}
+			} else {
+				// No Usage Tracker, we're fine
+				return;
+			}
 		}
 
 		const containers = await findSidebarContainers();
@@ -494,8 +511,11 @@
 
 		const presetSection = createPresetSection();
 
-		// Insert between starred and recents (or at the beginning)
-		if (containers.starredSection) {
+		// If Usage Tracker exists, insert after it
+		if (usageTrackerSection && usageTrackerSection.parentElement === containers.container) {
+			usageTrackerSection.after(presetSection);
+		} else if (containers.starredSection) {
+			// Insert between starred and recents (or at the beginning)
 			containers.container.insertBefore(presetSection, containers.starredSection);
 		} else {
 			containers.container.insertBefore(presetSection, containers.recentsSection);
@@ -508,10 +528,9 @@
 		tryInjectSettingsUI();
 		setInterval(tryInjectSettingsUI, 1000);
 
-		setTimeout(() => {
-			tryInjectUI();
-			setInterval(tryInjectUI, 1000);
-		}, 5000);
+		// Inject sidebar UI - will automatically position after Usage Tracker if present
+		tryInjectUI();
+		setInterval(tryInjectUI, 1000);
 
 		// Also listen for navigation changes
 		let lastPath = window.location.pathname;
