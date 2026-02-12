@@ -856,7 +856,9 @@ function createClaudeTooltip(element, tooltipText, deleteOnClick) {
 // All top right buttons must be in ISOLATED only!
 function tryAddTopRightButton(buttonClass, createButtonFn, tooltipText = '', forceDisplayOnMobile = false, displayOnNewPage = false) {
 	const isChatPage = window.location.href.includes("/chat/");
-	if (!isChatPage && !displayOnNewPage) return false;
+	if (!isChatPage && !displayOnNewPage) {
+		return false;
+	}
 
 	const BUTTON_PRIORITY = [
 		'search-button',
@@ -867,19 +869,70 @@ function tryAddTopRightButton(buttonClass, createButtonFn, tooltipText = '', for
 		'tts-settings-button',
 	];
 
-	let container;
-	if (isChatPage) container = document.querySelector("[data-testid=\"chat-actions\"]")
-	else {
-		const buttonWithGhost = document.querySelector('[class*="look-around"]');
-		if (buttonWithGhost) {
-			container = buttonWithGhost.closest('.z-header');
+	// Find the native button area as a reference point, then create/find our own sibling container.
+	// This avoids interfering with native button ordering (important for desktop client compatibility).
+	let parent, referenceNode;
+	const isHomePage = window.location.pathname === '/new' || window.location.pathname === '/';
+
+	if (isChatPage) {
+		const nativeContainer = document.querySelector("[data-testid=\"chat-actions\"]") ||
+			document.querySelector("[data-testid=\"wiggle-controls-actions\"]");
+		if (!nativeContainer) return false;
+		parent = nativeContainer.parentElement;
+		referenceNode = nativeContainer;
+	} else if (isHomePage) {
+		// Check if the ghost button is inside the main content area (web UI) vs title bar (desktop client)
+		const mainContent = document.getElementById('main-content');
+		const ghostInMain = mainContent?.querySelector('[class*="look-around"]');
+		if (ghostInMain) {
+			// Web UI: ghost button is in main content, insert next to its z-header container
+			parent = ghostInMain.closest('.z-header');
+			if (!parent) return false;
+			referenceNode = ghostInMain;
+			while (referenceNode.parentElement !== parent) {
+				referenceNode = referenceNode.parentElement;
+			}
+		} else {
+			// Desktop client: ghost button is in the title bar, not in main content.
+			// Use absolute positioning (not fixed) since main-content has position:relative
+			// and sits below the Electron title bar. Fixed would overlap the title bar.
+			if (!mainContent) return false;
+			let container = mainContent.querySelector('.toolbox-buttons-home');
+			if (!container) {
+				container = document.createElement('div');
+				container.className = 'toolbox-buttons-home toolbox-buttons absolute right-3 flex items-center gap-3.5';
+				container.style.top = '0.625rem';
+				mainContent.appendChild(container);
+			}
+			parent = container;
+			referenceNode = null;
 		}
+	} else {
+		document.querySelectorAll('.toolbox-buttons').forEach(el => el.remove());
+		return false;
 	}
 
-	if (!container && isChatPage) container = document.querySelector("[data-testid=\"wiggle-controls-actions\"]")
+	if (!parent) return false;
 
-	if (!container) {
-		return false;
+	// Clean up toolbox containers from other contexts
+	// (e.g., homepage container persisting when navigating to a chat page on desktop client)
+	document.querySelectorAll('.toolbox-buttons').forEach(el => {
+		if (el !== parent && el.parentElement !== parent) el.remove();
+	});
+
+	// Find or create our toolbox container
+	let container;
+	if (parent.classList.contains('toolbox-buttons')) {
+		// Desktop homepage: parent IS the toolbox container
+		container = parent;
+	} else {
+		// Web UI / chat page: toolbox container is a child of parent
+		container = parent.querySelector(':scope > .toolbox-buttons');
+		if (!container) {
+			container = document.createElement('div');
+			container.className = 'toolbox-buttons flex items-center gap-1';
+			parent.insertBefore(container, referenceNode);
+		}
 	}
 
 	const isMobile = window.innerHeight > window.innerWidth;
@@ -913,52 +966,38 @@ function tryAddTopRightButton(buttonClass, createButtonFn, tooltipText = '', for
 			madeChanges = true;
 		}
 
-		// Check if reordering is needed
+		// Reorder by priority (only our custom buttons live in this container)
 		const currentButtons = Array.from(container.querySelectorAll('button'));
 
-		// Separate custom and native buttons
-		const customButtons = currentButtons.filter(btn => btn.hasAttribute('data-toolbox-button'));
-		const nativeButtons = currentButtons.filter(btn => !btn.hasAttribute('data-toolbox-button'));
-
-		// Build custom button order: priority → non-priority → "More"
 		const priorityButtons = [];
 		for (const className of BUTTON_PRIORITY) {
-			const button = customButtons.find(btn => btn.classList.contains(className));
-			if (button) {
-				priorityButtons.push(button);
-			}
+			const button = currentButtons.find(btn => btn.classList.contains(className));
+			if (button) priorityButtons.push(button);
 		}
 
-		const nonPriorityButtons = customButtons.filter(btn =>
+		const nonPriorityButtons = currentButtons.filter(btn =>
 			!BUTTON_PRIORITY.some(className => btn.classList.contains(className)) &&
 			!btn.classList.contains('more-actions-button')
 		);
 
-		const moreButton = customButtons.find(btn => btn.classList.contains('more-actions-button'));
+		const moreButton = currentButtons.find(btn => btn.classList.contains('more-actions-button'));
 
-		// Desired order: priority → non-priority → "More" → native
 		const desiredOrder = [...priorityButtons, ...nonPriorityButtons];
-		if (moreButton) {
-			desiredOrder.push(moreButton);
-		}
-		desiredOrder.push(...nativeButtons);
+		if (moreButton) desiredOrder.push(moreButton);
 
-		// Only reorder if the current order doesn't match desired order
 		const needsReordering = currentButtons.length !== desiredOrder.length ||
 			!currentButtons.every((btn, index) => btn === desiredOrder[index]);
 
 		if (needsReordering) {
-			desiredOrder.forEach(button => {
-				container.appendChild(button);
-			});
+			desiredOrder.forEach(button => container.appendChild(button));
 			madeChanges = true;
 		}
 
 		// Remove "More" button if we're on desktop and no buttons need it
 		if (!isMobile && isChatPage) {
-			const moreButton = container.querySelector('.more-actions-button');
-			if (moreButton) {
-				moreButton.remove();
+			const moreBtn = container.querySelector('.more-actions-button');
+			if (moreBtn) {
+				moreBtn.remove();
 				madeChanges = true;
 			}
 		}
@@ -989,7 +1028,7 @@ function tryAddTopRightButton(buttonClass, createButtonFn, tooltipText = '', for
 		madeChanges = true;
 	}
 
-	// Make sure the "More" button exists
+	// Make sure the "More" button exists in our container
 	if (!container.querySelector('.more-actions-button')) {
 		const moreButton = createClaudeButton(`
 			<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
