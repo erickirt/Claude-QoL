@@ -157,7 +157,7 @@ class ClaudeConversation {
 		let assistantMessage;
 		let attempts = 0;
 		let messages;
-		const maxAttempts = 30;
+		const maxAttempts = 60;
 
 		while (!assistantMessage && attempts < maxAttempts) {
 			if (attempts > 0) {
@@ -225,7 +225,7 @@ class ClaudeConversation {
 	async getData(tree = false, forceRefresh = false) {
 		if (!this.conversationData || forceRefresh || (tree && !this.conversationData.chat_messages)) {
 			const response = await fetch(
-				`/api/organizations/${this.orgId}/chat_conversations/${this.conversationId}?tree=${tree}&rendering_mode=messages&render_all_tools=true&skip_uuid_injection=true`
+				`/api/organizations/${this.orgId}/chat_conversations/${this.conversationId}?tree=${tree}&rendering_mode=messages&render_all_tools=true&skip_uuid_injection=true&consistency=strong`
 			);
 			if (!response.ok) {
 				throw new Error('Failed to get conversation data');
@@ -1460,12 +1460,11 @@ async function isLikelyTextFile(file) {
 }
 
 const CLAUDE_MODELS = [
-	{ value: 'claude-opus-4-5-20251101', label: 'Opus 4.5' },
+	{ value: 'claude-opus-4-6', label: 'Opus 4.6' },
 	{ value: 'claude-sonnet-4-5-20250929', label: 'Sonnet 4.5' },
-	{ value: 'claude-opus-4-1-20250805', label: 'Opus 4.1' },
 	{ value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
+	{ value: 'claude-opus-4-5-20251101', label: 'Opus 4.5' },
 	{ value: 'claude-sonnet-4-20250514', label: 'Sonnet 4' },
-	{ value: 'claude-opus-4-20250514', label: 'Opus 4' },
 	{ value: 'claude-3-opus-20240229', label: 'Opus 3' },
 	{ value: 'claude-3-5-haiku-20241022', label: 'Haiku 3.5' }
 ]
