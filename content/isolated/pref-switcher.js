@@ -205,7 +205,7 @@
 
 		const containerWrapper = sidebarNav.querySelector('.flex.flex-grow.flex-col.overflow-y-auto');
 		const containers = containerWrapper?.querySelectorAll('.flex-1.relative');
-		const mainContainer = containers[containers.length - 1].querySelector('.px-2.mt-4');
+		const mainContainer = containers[containers.length - 1]?.querySelector('.px-2.mt-4');
 		if (!mainContainer) {
 			return null;
 		}
