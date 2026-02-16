@@ -872,14 +872,25 @@ function tryAddTopRightButton(buttonClass, createButtonFn, tooltipText = '', for
 	// Find the native button area as a reference point, then create/find our own sibling container.
 	// This avoids interfering with native button ordering (important for desktop client compatibility).
 	let parent, referenceNode;
+	let isWiggleLayout = false;
 	const isHomePage = window.location.pathname === '/new' || window.location.pathname === '/';
 
 	if (isChatPage) {
-		const nativeContainer = document.querySelector("[data-testid=\"chat-actions\"]") ||
-			document.querySelector("[data-testid=\"wiggle-controls-actions\"]");
-		if (!nativeContainer) return false;
-		parent = nativeContainer.parentElement;
-		referenceNode = nativeContainer;
+		const chatActions = document.querySelector("[data-testid=\"chat-actions\"]");
+		const wiggleControls = document.querySelector("[data-testid=\"wiggle-controls-actions\"]");
+		if (!chatActions && !wiggleControls) return false;
+
+		if (chatActions) {
+			parent = chatActions.parentElement;
+			referenceNode = chatActions;
+		} else {
+			// Wiggle-controls layout: parent is flex-col with wiggle-controls absolutely positioned.
+			// A normal sibling won't align, so we also use absolute positioning within the same parent
+			// and dynamically offset to sit left of wiggle-controls.
+			isWiggleLayout = true;
+			parent = wiggleControls.parentElement;
+			referenceNode = null;
+		}
 	} else if (isHomePage) {
 		// Check if the ghost button is inside the main content area (web UI) vs title bar (desktop client)
 		const mainContent = document.getElementById('main-content');
@@ -930,8 +941,25 @@ function tryAddTopRightButton(buttonClass, createButtonFn, tooltipText = '', for
 		container = parent.querySelector(':scope > .toolbox-buttons');
 		if (!container) {
 			container = document.createElement('div');
-			container.className = 'toolbox-buttons flex items-center gap-1';
-			parent.insertBefore(container, referenceNode);
+			if (isWiggleLayout) {
+				container.className = 'toolbox-buttons absolute top-0 z-20 flex items-center gap-1';
+				container.style.height = '3rem'; // match wiggle-controls !h-12
+			} else {
+				container.className = 'toolbox-buttons flex items-center gap-1';
+			}
+			if (referenceNode) {
+				parent.insertBefore(container, referenceNode);
+			} else {
+				parent.appendChild(container);
+			}
+		}
+	}
+
+	// Keep wiggle-layout container positioned to the left of wiggle-controls
+	if (isWiggleLayout) {
+		const wiggleControls = parent.querySelector("[data-testid=\"wiggle-controls-actions\"]");
+		if (wiggleControls) {
+			container.style.right = (wiggleControls.offsetWidth + 4) + 'px';
 		}
 	}
 
