@@ -1460,6 +1460,7 @@ async function isLikelyTextFile(file) {
 }
 
 const CLAUDE_MODELS = [
+	{ value: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
 	{ value: 'claude-opus-4-6', label: 'Opus 4.6' },
 	{ value: 'claude-sonnet-4-5-20250929', label: 'Sonnet 4.5' },
 	{ value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
@@ -1469,7 +1470,7 @@ const CLAUDE_MODELS = [
 	{ value: 'claude-3-5-haiku-20241022', label: 'Haiku 3.5' }
 ]
 
-const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-5-20250929';
+const DEFAULT_CLAUDE_MODEL = CLAUDE_MODELS[0].value;
 const FAST_MODEL = 'claude-haiku-4-5-20251001';
 
 // Test function for verifying ClaudeMessage and file classes work correctly
