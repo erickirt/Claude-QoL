@@ -383,7 +383,7 @@
 
 	function createMicButton() {
 		const container = document.createElement('div');
-		container.className = 'stt-mic-container inline-flex gap-1 mr-2';
+		container.className = 'stt-mic-container inline-flex gap-1';
 		container.style.display = 'inline-flex';
 
 		updateMicButton(container);
@@ -451,18 +451,21 @@
 
 		if (document.querySelector('.stt-mic-container')) return;
 
-		const sendButton = document.querySelector('button[aria-label="Send message"]');
-		if (!sendButton) return;
+		// Use model-selector-dropdown as a stable landmark to find the input toolbar.
+		// This works regardless of whether the send button or voice button is showing.
+		// Structure: button -> div.overflow-hidden -> div.transition-all (toolbar child)
+		const modelSelector = document.querySelector('button[data-testid="model-selector-dropdown"]');
+		if (!modelSelector) return;
 
-		const container = sendButton.parentElement;
-		if (!container) return;
+		const modelSelectorSection = modelSelector.parentElement?.parentElement;
+		if (!modelSelectorSection) return;
+
+		// Next sibling is the send/voice button area
+		const sendArea = modelSelectorSection.nextElementSibling;
+		if (!sendArea) return;
 
 		const micContainer = createMicButton();
-
-		container.style.display = 'flex';
-		container.style.alignItems = 'center';
-
-		container.insertBefore(micContainer, sendButton);
+		sendArea.parentElement.insertBefore(micContainer, sendArea);
 	}
 
 	// ======== INITIALIZATION ========
