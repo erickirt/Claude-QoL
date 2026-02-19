@@ -726,7 +726,22 @@ If this is a writing or creative discussion, include sections for characters, pl
 	async function generateSummaryForChunk(tempConversation, messages, priorSummaryTexts) {
 		console.log("Generating summary for chunk with", messages.length, "messages");
 		const includeAttachments = pendingFork.includeAttachments && pendingFork.keepFilesFromSummarized;
-
+		for (const msg of messages) {
+			// Need to filter through each element in the content array
+			const newContentArray = []
+			for (const item of msg.content) {
+				if (item.type == 'text') {
+					console.log("Original text content:", item.text);
+					const text = item.text;
+					if (text.includes("Simply say 'Acknowledged' and wait for user input.")) {
+						item.text = text.replace("Simply say 'Acknowledged' and wait for user input.", '').trim();
+						console.log("Removed boilerplate text from message content");
+					}
+				}
+				newContentArray.push(item);
+			}
+			msg.content = newContentArray;
+		}
 		// Extract from messages using files getter with instanceof filters
 		const files = messages.flatMap(m =>
 			m.files.filter(f => f instanceof ClaudeFile || f instanceof ClaudeCodeExecutionFile)
