@@ -1,8 +1,8 @@
 {
 	"manifest_version": 3,
-	"name": "Claude QoL",
-	"version": "2.4.2",
-	"description": "Collection of enhancements for Claude.ai",
+	"name": "Claude QoL - Export, Fork, Search, and more",
+	"version": "2.4.6",
+	"description": "Collection of enhancements for Claude",
 	"permissions": [
 		"storage"
 	],
@@ -34,7 +34,8 @@
 				"content/isolated/stt.js",
 				"content/isolated/perchat-styles.js",
 				"content/isolated/tts.js",
-				"content/isolated/exporter.js"
+				"content/isolated/exporter.js",
+				"content/isolated/notifications.js"
 			],
 			"run_at": "document_idle"
 		},
@@ -70,5 +71,16 @@
 	"action": {
 		"default_icon": "icon128.png",
 		"default_title": "Claude Toolbox - Support development"
-	}
+	},
+	"web_accessible_resources": [
+		{
+			"resources": [
+				"kofi-button.png",
+				"update_patchnotes.txt"
+			],
+			"matches": [
+				"https://claude.ai/*"
+			]
+		}
+	]
 }

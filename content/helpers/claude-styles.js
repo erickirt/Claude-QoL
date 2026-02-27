@@ -854,9 +854,10 @@ function createClaudeTooltip(element, tooltipText, deleteOnClick) {
 
 
 // All top right buttons must be in ISOLATED only!
-function tryAddTopRightButton(buttonClass, createButtonFn, tooltipText = '', forceDisplayOnMobile = false, displayOnNewPage = false) {
+function tryAddTopRightButton(buttonClass, createButtonFn, tooltipText = '', forceDisplayOnMobile = false, displayOnNewPage = false, displayOnProjectPage = false) {
 	const isChatPage = window.location.href.includes("/chat/");
-	if (!isChatPage && !displayOnNewPage) {
+	const isProjectPage = Boolean(window.location.pathname.match(/\/project\/[a-f0-9-]+/));
+	if (!isChatPage && !(displayOnNewPage && !isProjectPage) && !(isProjectPage && displayOnProjectPage)) {
 		return false;
 	}
 
@@ -918,6 +919,13 @@ function tryAddTopRightButton(buttonClass, createButtonFn, tooltipText = '', for
 			parent = container;
 			referenceNode = null;
 		}
+	} else if (isProjectPage) {
+		// Project page: insert inside the native action button row (star/hamburger), before the star button
+		const nativeActions = document.querySelector('.flex.items-center.gap-1.ml-auto');
+		if (!nativeActions) return false;
+		const starWrapper = nativeActions.querySelector('[data-state]');
+		parent = nativeActions;
+		referenceNode = starWrapper || null;
 	} else {
 		document.querySelectorAll('.toolbox-buttons').forEach(el => el.remove());
 		return false;

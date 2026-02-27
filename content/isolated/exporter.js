@@ -24,6 +24,14 @@
 	const TAG_REGEX = new RegExp(`^\\[${EXPORT_TAG_PREFIX}([\\da-zA-Z_-]+)(?::(\\d+))?\\]$`);
 	const ATTACHMENT_DELIMITER_REGEX = /\n*=====ATTACHMENT_BEGIN: .+?=====\n[\s\S]*?\n=====ATTACHMENT_END=====/g;
 
+	let bulkExportCancelled = false;
+
+	function makeUniqueFilename(filename, uuid) {
+		const lastDot = filename.lastIndexOf('.');
+		if (lastDot === -1) return `${filename}-${uuid}`;
+		return `${filename.substring(0, lastDot)}-${uuid}${filename.substring(lastDot)}`;
+	}
+
 	//#region Export format handlers
 	function formatTxtExport(conversationData, messages, conversationId) {
 		let output = `Settings: ${JSON.stringify(conversationData.settings || {})}\n`;
@@ -226,7 +234,7 @@
 
 		// Generate the txt content
 		const txtContent = formatTxtExport(conversationData, messages, conversationId);
-		zip.file('conversation.txt', txtContent);
+		await addToZip(zip, 'conversation.txt', txtContent);
 
 		// Collect all downloadable files (ClaudeFile and ClaudeCodeExecutionFile)
 		const allFiles = messages.flatMap(msg =>
@@ -276,13 +284,13 @@
 		}
 
 		for (const file of filesToZipUp) {
-			zip.file(file.name, file.data, { base64: true });
+			await addToZip(zip, file.name, file.data);
 		}
 
 		// Add text attachments (content is inline, no download needed)
 		for (const attachment of attachments) {
 			const filename = `files/${buildAttachmentZipFilename(attachment.file_name)}`;
-			zip.file(filename, attachment.extracted_content);
+			await addToZip(zip, filename, attachment.extracted_content);
 		}
 
 		return await zip.generateAsync({ type: 'blob' });
@@ -790,12 +798,12 @@
 	function extractEmbeddedAttachments(text) {
 		const attachments = [];
 		const attachmentPattern = /\n*=====ATTACHMENT_BEGIN: (.+?)=====\n([\s\S]*?)\n=====ATTACHMENT_END=====/g;
-		
+
 		let match;
 		while ((match = attachmentPattern.exec(text)) !== null) {
 			const fileName = match[1];
 			const content = match[2];
-			
+
 			attachments.push({
 				file_name: fileName,
 				extracted_content: content,
@@ -803,10 +811,10 @@
 				file_type: 'text/plain'
 			});
 		}
-		
+
 		return attachments;
 	}
-	
+
 	function parseLibrechatJson(jsonText) {
 		const data = JSON.parse(jsonText);
 		const warnings = [];
@@ -846,7 +854,7 @@
 
 			// Convert files to attachments (text-based files only)
 			const attachmentsToAdd = [];
-			
+
 			// First, check files array
 			if (raw.files && Array.isArray(raw.files) && raw.files.length > 0) {
 				for (const file of raw.files) {
@@ -864,7 +872,7 @@
 				const textContent = raw.text || '';
 				const embeddedAttachments = extractEmbeddedAttachments(textContent);
 				attachmentsToAdd.push(...embeddedAttachments);
-				
+
 				// Also check content array
 				if (raw.content && Array.isArray(raw.content)) {
 					for (const block of raw.content) {
@@ -875,7 +883,7 @@
 					}
 				}
 			}
-			
+
 			// Add all attachments to message
 			for (const attData of attachmentsToAdd) {
 				msg.attachFile(parseFileFromAPI(attData, conversation));
@@ -997,7 +1005,7 @@
 			} else if (file.name.endsWith('.txt')) {
 				// TXT import - wrap in virtual zip for unified handling
 				const zip = new JSZip();
-				zip.file('conversation.txt', fileContent);
+				await addToZip(zip, 'conversation.txt', fileContent);
 				parsedData = await parseZipImport(zip, loadingModal, false); // No files in TXT
 			} else if (file.name.endsWith('.json')) {
 				const jsonData = JSON.parse(fileContent);
@@ -1128,9 +1136,226 @@
 	}
 	//#endregion
 
+	async function exportSingleConversation(orgId, conversationId, format, extension, exportTree, exportOptions, loadingModal, cachedData = null) {
+		const conversation = new ClaudeConversation(orgId, conversationId, cachedData);
+		const conversationData = await conversation.getData(exportTree);
+		const messages = await conversation.getMessages(exportTree);
+		const safeName = (conversationData.name || 'untitled').replace(/[<>:"/\\|?*]/g, '_');
+		const filename = `Claude_export_${safeName}_${conversationId}.${extension}`;
+		const exportContent = await formatExport(conversationData, messages, format, conversationId, loadingModal, exportOptions);
+		const blob = exportContent instanceof Blob
+			? exportContent
+			: new Blob([exportContent], { type: 'text/plain' });
+		return { filename, blob, conversationData };
+	}
+
+	async function handleBulkExport(formatSelectValue, exportOptions, modal, projectId = null, exportTree = false, afterDate = null) {
+		bulkExportCancelled = false;
+
+		const loadingModal = createLoadingModal('Fetching conversation list...');
+		loadingModal.addCancel('Cancel', () => {
+			bulkExportCancelled = true;
+		});
+		loadingModal.show();
+
+		try {
+			localStorage.setItem('lastExportFormat', formatSelectValue);
+
+			const parts = formatSelectValue.split("_");
+			const format = parts[0];
+			const extension = parts[1];
+			const orgId = getOrgId();
+
+			// Fetch conversations (project-scoped or all)
+			const apiUrl = projectId
+				? `/api/organizations/${orgId}/projects/${projectId}/conversations`
+				: `/api/organizations/${orgId}/chat_conversations`;
+			const response = await fetch(apiUrl);
+			if (!response.ok) throw new Error('Failed to fetch conversations');
+			let conversations = await response.json();
+			// Keep only the last 10 conversations (THIS IS FOR TESTING - REMOVE IN RELEASE)
+			//conversations = conversations.slice(0, 10);
+
+			// Filter by date if specified
+			if (afterDate) {
+				conversations = conversations.filter(c => new Date(c.updated_at) >= afterDate);
+			}
+
+			if (bulkExportCancelled) {
+				loadingModal.destroy();
+				return;
+			}
+
+			if (!conversations.length) {
+				loadingModal.destroy();
+				showClaudeAlert('Bulk Export', 'No conversations found.');
+				return;
+			}
+
+			const masterZip = new JSZip();
+			let completed = 0;
+			const total = conversations.length;
+			const delayMs = Math.min(2000, 100 + total);
+
+			// Load export cache
+			const exportDB = window.ClaudeSearchShared?.exportDB;
+			let cachedMap = new Map();
+			if (exportDB) {
+				try {
+					const cached = await exportDB.getAll();
+					cachedMap = new Map(cached.map(c => [c.uuid, c]));
+				} catch (e) {
+					console.error('[Export] Failed to load cache:', e);
+				}
+			}
+
+			// Split into 2 chunks for parallel processing
+			const chunk1 = conversations.filter((_, i) => i % 2 === 0);
+			const chunk2 = conversations.filter((_, i) => i % 2 === 1);
+
+			async function processChunk(chunk) {
+				const results = [];
+				for (let i = 0; i < chunk.length; i++) {
+					if (bulkExportCancelled) return results;
+
+					const conv = chunk[i];
+					let cachedData = null;
+					try {
+						// Check cache
+						const cachedEntry = cachedMap.get(conv.uuid);
+						if (cachedEntry && cachedEntry.updated_at >= conv.updated_at) {
+							cachedData = cachedEntry.data;
+							//console.log(`[Export] Cache hit: ${conv.uuid}`);
+						}
+
+						const { filename, blob, conversationData } = await exportSingleConversation(
+							orgId, conv.uuid, format, extension, exportTree, exportOptions, loadingModal, cachedData
+						);
+						results.push({ filename, blob });
+
+						// Cache the conversation data on miss
+						if (!cachedData && exportDB && conversationData) {
+							try {
+								await exportDB.put(conv.uuid, conv.updated_at, conversationData);
+							} catch (e) {
+								console.error(`[Export] Failed to cache ${conv.uuid}:`, e);
+							}
+						}
+					} catch (error) {
+						console.error(`Failed to export conversation ${conv.uuid}:`, error);
+					}
+
+					completed++;
+					loadingModal.setContent(createLoadingContent(`Exporting ${completed} of ${total} conversations...`));
+
+					// Only delay on cache miss (API call) to avoid rate limiting
+					if (!cachedData && i < chunk.length - 1) {
+						await new Promise(resolve => setTimeout(resolve, delayMs));
+					}
+				}
+				return results;
+			}
+
+			const [results1, results2] = await Promise.all([
+				processChunk(chunk1),
+				processChunk(chunk2)
+			]);
+
+			// Add to zip sequentially
+			const allResults = [...results1, ...results2];
+			for (const { filename, blob } of allResults) {
+				await addToZip(masterZip, filename, blob);
+			}
+
+			// Download project files if exporting a project (skip if cancelled)
+			let projectName = 'untitled';
+			if (projectId && !bulkExportCancelled) {
+				loadingModal.setContent(createLoadingContent('Downloading project files...'));
+				const project = new ClaudeProject(orgId, projectId);
+				const [projectData, docs, files] = await Promise.all([project.getData(), project.getDocs(), project.getFiles()]);
+				projectName = (projectData.name || 'untitled').replace(/[<>:"/\\|?*]/g, '_');
+
+				// Save project instructions if present
+				if (projectData.prompt_template && typeof projectData.prompt_template === 'string') {
+					await addToZip(masterZip, 'project_instructions.txt', projectData.prompt_template);
+				}
+
+				for (const doc of docs) {
+					const filename = makeUniqueFilename(doc.file_name, doc.uuid);
+					await addToZip(masterZip, `project_files/${filename}`, doc.content);
+				}
+
+				for (const file of files) {
+					if (bulkExportCancelled) break;
+
+					let downloadUrl;
+					if (file.file_kind === 'document' && file.document_asset) {
+						downloadUrl = file.document_asset.url;
+					} else if (file.file_kind === 'image') {
+						downloadUrl = file.preview_url || file.thumbnail_url;
+						if (file.preview_asset?.file_variant === 'original') {
+							downloadUrl = file.preview_asset.url;
+						} else if (file.thumbnail_asset?.file_variant === 'original') {
+							downloadUrl = file.thumbnail_asset.url;
+						}
+					} else {
+						downloadUrl = file.preview_url || file.thumbnail_url;
+					}
+
+					if (!downloadUrl) continue;
+
+					try {
+						const response = await fetch(downloadUrl);
+						if (!response.ok) {
+							console.error(`Failed to fetch project file ${file.file_name}`);
+							continue;
+						}
+						const blob = await response.blob();
+						const filename = makeUniqueFilename(file.file_name, file.file_uuid);
+
+						await addToZip(masterZip, `project_files/${filename}`, blob);
+					} catch (error) {
+						console.error(`Error downloading project file ${file.file_name}:`, error);
+					}
+				}
+			}
+
+			// Always proceed to zip generation if there are results
+			if (allResults.length === 0) {
+				loadingModal.destroy();
+				return;
+			}
+
+			loadingModal.setContent(createLoadingContent(bulkExportCancelled ? 'Generating partial zip file...' : 'Generating zip file...'));
+			const masterBlob = await masterZip.generateAsync({ type: 'blob' });
+
+			const url = URL.createObjectURL(masterBlob);
+			const link = document.createElement('a');
+			link.href = url;
+			if (projectId) {
+				link.download = `Claude_project_export_${projectName}_${projectId}.zip`;
+			} else {
+				link.download = `Claude_bulk_export_${new Date().toISOString().slice(0, 10)}.zip`;
+			}
+			link.click();
+			URL.revokeObjectURL(url);
+
+			loadingModal.destroy();
+			modal.hide();
+		} catch (error) {
+			console.error('Bulk export failed:', error);
+			loadingModal.destroy();
+			if (!bulkExportCancelled) {
+				showClaudeAlert('Export Error', error.message || 'Failed to bulk export conversations');
+			}
+		}
+	}
+
 	async function showExportImportModal() {
 		const conversationId = getConversationId();
+		const projectId = getProjectId();
 		const isInConversation = Boolean(conversationId);
+		const isOnProjectPage = Boolean(projectId);
 
 		// Get last used format from localStorage (default to zip for full fidelity)
 		const lastFormat = localStorage.getItem('lastExportFormat') || 'zip_zip';
@@ -1139,10 +1364,10 @@
 		const content = document.createElement('div');
 
 		// Variables to hold references (may not be created)
-		let formatSelect, toggleInput, thinkingToggleInput;
+		let formatSelect, toggleInput, thinkingToggleInput, dateInput;
 
-		//#region Export section (only if in conversation)
-		if (isInConversation) {
+		//#region Export section (always shown, context-aware)
+		{
 			// Format label
 			const formatLabel = document.createElement('label');
 			formatLabel.className = CLAUDE_CLASSES.LABEL;
@@ -1163,8 +1388,9 @@
 			formatSelect.style.flex = '1';
 			exportContainer.appendChild(formatSelect);
 
-			// Export button
-			const exportButton = createClaudeButton('Export', 'primary');
+			// Export button - label depends on context
+			const exportLabel = isInConversation ? 'Export' : (isOnProjectPage ? 'Export Project' : 'Export All');
+			const exportButton = createClaudeButton(exportLabel, 'primary');
 			exportButton.style.minWidth = '80px';
 			exportContainer.appendChild(exportButton);
 
@@ -1190,6 +1416,19 @@
 			thinkingOption.appendChild(thinkingToggleContainer);
 			content.appendChild(thinkingOption);
 
+			// Date filter option (bulk export only)
+			const dateOption = document.createElement('div');
+			dateOption.className = 'mb-4' + (isInConversation ? ' hidden' : '');
+
+			const dateLabel = document.createElement('label');
+			dateLabel.className = CLAUDE_CLASSES.LABEL;
+			dateLabel.textContent = 'Export conversations updated after:';
+			dateOption.appendChild(dateLabel);
+
+			dateInput = createClaudeInput({ type: 'date' });
+			dateOption.appendChild(dateInput);
+			content.appendChild(dateOption);
+
 			// Show/hide options based on initial value
 			const initialFormat = lastFormat.split('_')[0];
 			treeOption.classList.toggle('hidden', !['librechat', 'raw'].includes(initialFormat));
@@ -1204,46 +1443,46 @@
 
 			// Export button handler
 			exportButton.onclick = async () => {
-				const loadingModal = createLoadingModal('Exporting...');
-				loadingModal.show();
+				const exportOptions = {
+					includeThinking: thinkingToggleInput?.checked ?? true
+				};
 
-				try {
-					localStorage.setItem('lastExportFormat', formatSelect.value);
+				if (isInConversation) {
+					// Single conversation export
+					const loadingModal = createLoadingModal('Exporting...');
+					loadingModal.show();
 
-					const parts = formatSelect.value.split("_");
-					const format = parts[0];
-					const extension = parts[1];
-					const exportTree = toggleInput.checked;
+					try {
+						localStorage.setItem('lastExportFormat', formatSelect.value);
 
-					const orgId = getOrgId();
-					const conversation = new ClaudeConversation(orgId, conversationId);
-					const conversationData = await conversation.getData(exportTree);
-					const messages = await conversation.getMessages(exportTree);
+						const parts = formatSelect.value.split("_");
+						const format = parts[0];
+						const extension = parts[1];
+						const exportTree = toggleInput.checked;
+						const orgId = getOrgId();
 
-					const filename = `Claude_export_${conversationData.name}_${conversationId}.${extension}`;
-					const exportOptions = {
-						includeThinking: thinkingToggleInput?.checked ?? true
-					};
-					const exportContent = await formatExport(conversationData, messages, format, conversationId, loadingModal, exportOptions);
+						const { filename, blob } = await exportSingleConversation(
+							orgId, conversationId, format, extension, exportTree, exportOptions, loadingModal
+						);
 
-					// Handle blob vs string content
-					const blob = exportContent instanceof Blob
-						? exportContent
-						: new Blob([exportContent], { type: 'text/plain' });
+						const url = URL.createObjectURL(blob);
+						const link = document.createElement('a');
+						link.href = url;
+						link.download = filename;
+						link.click();
+						URL.revokeObjectURL(url);
 
-					const url = URL.createObjectURL(blob);
-					const link = document.createElement('a');
-					link.href = url;
-					link.download = filename;
-					link.click();
-					URL.revokeObjectURL(url);
-
-					loadingModal.destroy();
-					modal.hide();
-				} catch (error) {
-					console.error('Export failed:', error);
-					loadingModal.destroy();
-					showClaudeAlert('Export Error', error.message || 'Failed to export conversation');
+						loadingModal.destroy();
+						modal.hide();
+					} catch (error) {
+						console.error('Export failed:', error);
+						loadingModal.destroy();
+						showClaudeAlert('Export Error', error.message || 'Failed to export conversation');
+					}
+				} else {
+					// Bulk export (all conversations or project-scoped)
+					const afterDate = dateInput?.value ? new Date(dateInput.value) : null;
+					await handleBulkExport(formatSelect.value, exportOptions, modal, projectId, toggleInput.checked, afterDate);
 				}
 			};
 
@@ -1335,7 +1574,7 @@
 		//#endregion
 
 		// Create modal with appropriate title
-		const modalTitle = isInConversation ? 'Export & Import' : 'Import Conversation';
+		const modalTitle = 'Export & Import';
 		const modal = new ClaudeModal(modalTitle, content);
 
 		// Override max width
@@ -1358,8 +1597,8 @@
 	}
 
 	function initialize() {
-		tryAddTopRightButton("export-button", createExportButton, "Export/Import chat", false, true);
-		setInterval(() => tryAddTopRightButton('export-button', createExportButton, "Export/Import chat", false, true), 1000);
+		tryAddTopRightButton("export-button", createExportButton, "Export/Import chat", false, true, true);
+		setInterval(() => tryAddTopRightButton('export-button', createExportButton, "Export/Import chat", false, true, true), 1000);
 	}
 
 	// Wait for dependencies to be available

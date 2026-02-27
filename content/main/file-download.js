@@ -264,70 +264,6 @@
 		return originalFetch.apply(this, args);
 	};
 
-	function addDownloadAllButton() {
-		const LOG_PREFIX = '[Project Downloads]';
-
-		// Find the container with the hamburger menu and star button
-		const container = document.querySelector('.flex.items-center.gap-1.ml-auto');
-		if (!container) {
-			return false;
-		}
-
-		// Check if button already exists
-		if (container.querySelector('.project-download-all-button')) {
-			return true;
-		}
-
-		//console.log(`${LOG_PREFIX} Adding download all button`);
-
-		// Create button matching the style of hamburger/star buttons
-		const button = document.createElement('button');
-		button.className = 'inline-flex items-center justify-center relative shrink-0 can-focus select-none disabled:pointer-events-none disabled:opacity-50 disabled:shadow-none disabled:drop-shadow-none border-transparent transition font-base duration-300 ease-[cubic-bezier(0.165,0.85,0.45,1)] h-8 w-8 rounded-md active:scale-95 active:!scale-100 pointer-events-auto Button_ghost__Ywhj1 project-download-all-button';
-		button.type = 'button';
-		button.setAttribute('aria-label', 'Download all files');
-
-		// Add icon
-		button.innerHTML = `
-		<div class="flex items-center justify-center" style="width: 20px; height: 20px;">
-			<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" viewBox="0 0 256 256">
-				<path d="M224,144v64a8,8,0,0,1-8,8H40a8,8,0,0,1-8-8V144a8,8,0,0,1,16,0v56H208V144a8,8,0,0,1,16,0Zm-101.66,5.66a8,8,0,0,0,11.32,0l40-40a8,8,0,0,0-11.32-11.32L136,124.69V32a8,8,0,0,0-16,0v92.69L93.66,98.34a8,8,0,0,0-11.32,11.32Z"></path>
-			</svg>
-		</div>
-	`;
-
-		// Add tooltip
-		createClaudeTooltip(button, 'Download all files');
-
-		// Add click handler
-		button.onclick = async (e) => {
-			e.stopPropagation();
-			//console.log(`${LOG_PREFIX} Download all button clicked`);
-
-			const urlData = parseProjectUrl(window.location.href);
-			if (!urlData) return;
-
-			const project = new ClaudeProject(urlData.orgId, urlData.projectId);
-
-			try {
-				await project.downloadAll();
-			} catch (error) {
-				console.error(`${LOG_PREFIX} Failed to download all:`, error);
-				alert('Failed to download all files');
-			}
-		};
-
-		// Insert before the star button (which is wrapped in a div with data-state)
-		const starButtonWrapper = container.querySelector('[data-state]');
-		if (starButtonWrapper) {
-			container.insertBefore(button, starButtonWrapper);
-		} else {
-			// Fallback: append to container
-			container.appendChild(button);
-		}
-
-		return true;
-	}
-
 	// File preview download
 
 	function addAttachmentDownloadButton() {
@@ -382,10 +318,6 @@
 			processProject();
 		}
 
-		// Also check for download all button
-		if (currentUrl.includes('/project/')) {
-			addDownloadAllButton();
-		}
 		addAttachmentDownloadButton();
 	}, 1000);
 
@@ -394,7 +326,6 @@
 	if (window.location.href.includes('/project/')) {
 		//console.log(`${LOG_PREFIX} Initial load on project page, triggering processProject()`);
 		processProject();
-		setTimeout(() => addDownloadAllButton(), 500); // Give page time to render
 	} else {
 		//console.log(`${LOG_PREFIX} Not on project page, waiting for navigation`);
 	}

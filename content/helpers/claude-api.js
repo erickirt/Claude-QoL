@@ -43,10 +43,13 @@ function getLocale() {
 fetchAndCacheLocale().then(locale => { _cachedLocale = locale; });
 
 class ClaudeConversation {
-	constructor(orgId, conversationId = null) {
+	constructor(orgId, conversationId = null, initialData = null) {
 		this.orgId = orgId;
 		this.conversationId = conversationId;
 		this.created = conversationId ? true : false;
+		if (initialData) {
+			this.conversationData = initialData;
+		}
 	}
 
 	// Create a new conversation
@@ -590,7 +593,19 @@ class ClaudeCodeExecutionFile {
 		return new ClaudeCodeExecutionFile(json, orgId, conversationId);
 	}
 }
-
+async function addToZip(zip, filename, data) {
+	if (data && typeof data.arrayBuffer === 'function') {
+		const buf = await data.arrayBuffer();
+		const bytes = new Uint8Array(buf);
+		let binary = '';
+		for (let i = 0; i < bytes.length; i++) {
+			binary += String.fromCharCode(bytes[i]);
+		}
+		zip.file(filename, btoa(binary), { base64: true });
+		return;
+	}
+	zip.file(filename, data);
+}
 // Unified file parsing - takes API data and returns appropriate class
 function parseFileFromAPI(apiData, conversation = null) {
 	// Code execution file - has path property
@@ -1098,6 +1113,7 @@ class ClaudeProject {
 		URL.revokeObjectURL(url);
 	}
 
+
 	// Download all files and attachments as a zip
 	async downloadAll() {
 
@@ -1117,7 +1133,7 @@ class ClaudeProject {
 		for (const doc of docs) {
 			// Add UUID to filename to avoid collisions
 			const filename = this._makeUniqueFilename(doc.file_name, doc.uuid);
-			zip.file(filename, doc.content);
+			await addToZip(zip, filename, doc.content);
 		}
 
 		// Fetch and add files
@@ -1153,7 +1169,7 @@ class ClaudeProject {
 
 				// Add UUID to filename to avoid collisions
 				const filename = this._makeUniqueFilename(file.file_name, file.file_uuid);
-				zip.file(filename, blob);
+				await addToZip(zip, filename, blob);
 			} catch (error) {
 				console.error(`[ClaudeProject] Error downloading ${file.file_name}:`, error);
 			}
@@ -1390,6 +1406,11 @@ function getOrgId() {
 
 function getConversationId() {
 	const match = window.location.pathname.match(/\/chat\/([a-f0-9-]+)/);
+	return match ? match[1] : null;
+}
+
+function getProjectId() {
+	const match = window.location.pathname.match(/\/project\/([a-f0-9-]+)/);
 	return match ? match[1] : null;
 }
 

@@ -6,3 +6,8 @@ CLAUDE.md
 content/helpers/tts-providers.js
 icon-v2.psd
 .claude/*
+icon_svgs/*
+*.psd
+promo_*
+screenshot_*
+nul

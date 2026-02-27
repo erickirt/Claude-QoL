@@ -122,4 +122,30 @@
 
 	// Global database instance
 	window.ClaudeSearchShared.searchDB = new SearchDatabase();
+
+	// ======== EXPORT CACHE DB ========
+	const exportDB = new Dexie('ClaudeExportDB');
+	exportDB.version(1).stores({
+		conversations: 'uuid'  // stores { uuid, updated_at, data }
+	});
+
+	class ExportDatabase {
+		async get(conversationId) {
+			return await exportDB.conversations.get(conversationId);
+		}
+
+		async put(conversationId, updatedAt, data) {
+			await exportDB.conversations.put({ uuid: conversationId, updated_at: updatedAt, data });
+		}
+
+		async getAll() {
+			return await exportDB.conversations.toArray();
+		}
+
+		async delete(conversationId) {
+			await exportDB.conversations.delete(conversationId);
+		}
+	}
+
+	window.ClaudeSearchShared.exportDB = new ExportDatabase();
 })();
