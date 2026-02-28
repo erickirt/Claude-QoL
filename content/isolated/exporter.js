@@ -204,8 +204,14 @@
 		}, null, 2);
 	}
 
-	function formatRawExport(conversationData, conversationId) {
-		return JSON.stringify(conversationData, null, 2);
+	function formatRawExport(conversationData, messages, conversationId) {
+		// Filter chat_messages to only include messages present in the export set
+		const messageUuids = new Set(messages.map(m => m.uuid));
+		const filtered = {
+			...conversationData,
+			chat_messages: conversationData.chat_messages.filter(m => messageUuids.has(m.uuid))
+		};
+		return JSON.stringify(filtered, null, 2);
 	}
 
 	function buildZipFilename(uuid, filename) {
@@ -308,7 +314,7 @@
 			case 'librechat':
 				return formatLibrechatExport(conversationData, messages, conversationId);
 			case 'raw':
-				return formatRawExport(conversationData, conversationId);
+				return formatRawExport(conversationData, messages, conversationId);
 			case 'zip':
 				return formatZipExport(conversationData, messages, conversationId, loadingModal);
 			default:
@@ -1138,7 +1144,7 @@
 
 	async function exportSingleConversation(orgId, conversationId, format, extension, exportTree, exportOptions, loadingModal, cachedData = null) {
 		const conversation = new ClaudeConversation(orgId, conversationId, cachedData);
-		const conversationData = await conversation.getData(exportTree);
+		const conversationData = await conversation.getData();
 		const messages = await conversation.getMessages(exportTree);
 		const safeName = (conversationData.name || 'untitled').replace(/[<>:"/\\|?*]/g, '_');
 		const filename = `Claude_export_${safeName}_${conversationId}.${extension}`;

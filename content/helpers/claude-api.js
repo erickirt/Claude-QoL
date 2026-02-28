@@ -224,11 +224,11 @@ class ClaudeConversation {
 		return new ClaudeCodeExecutionFile(result, this.orgId, this.conversationId);
 	}
 
-	// Lazy load conversation data
-	async getData(tree = false, forceRefresh = false) {
-		if (!this.conversationData || forceRefresh || (tree && !this.conversationData.chat_messages)) {
+	// Lazy load conversation data (always fetches full tree)
+	async getData(forceRefresh = false) {
+		if (!this.conversationData || forceRefresh) {
 			const response = await fetch(
-				`/api/organizations/${this.orgId}/chat_conversations/${this.conversationId}?tree=${tree}&rendering_mode=messages&render_all_tools=true&skip_uuid_injection=true&consistency=strong`
+				`/api/organizations/${this.orgId}/chat_conversations/${this.conversationId}?tree=true&rendering_mode=messages&render_all_tools=true&skip_uuid_injection=true&consistency=strong`
 			);
 			if (!response.ok) {
 				throw new Error('Failed to get conversation data');
@@ -238,12 +238,30 @@ class ClaudeConversation {
 		return this.conversationData;
 	}
 
-	// Get messages (now uses getData)
+	// Get messages - when tree=false, reconstructs the current trunk from full tree data
 	async getMessages(tree = false, forceRefresh = false) {
-		const data = await this.getData(tree, forceRefresh);
-		return (data.chat_messages || []).map(msg =>
-			ClaudeMessage.fromHistoryJSON(this, msg)
-		);
+		const data = await this.getData(forceRefresh);
+		const allMessages = data.chat_messages || [];
+
+		if (tree) {
+			return allMessages.map(msg => ClaudeMessage.fromHistoryJSON(this, msg));
+		}
+
+		// Reconstruct trunk: walk from current leaf to root
+		const messageMap = new Map(allMessages.map(msg => [msg.uuid, msg]));
+		const rootId = "00000000-0000-4000-8000-000000000000";
+		const trunk = [];
+		let currentId = data.current_leaf_message_uuid;
+
+		while (currentId && currentId !== rootId) {
+			const msg = messageMap.get(currentId);
+			if (!msg) break;
+			trunk.push(msg);
+			currentId = msg.parent_message_uuid;
+		}
+
+		trunk.reverse();
+		return trunk.map(msg => ClaudeMessage.fromHistoryJSON(this, msg));
 	}
 
 	// Find longest leaf from a message ID

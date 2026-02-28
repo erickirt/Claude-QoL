@@ -404,8 +404,8 @@ If this is a writing or creative discussion, include sections for characters, pl
 	//#region Convo extraction & Other API
 	async function getConversationMessages(orgId, conversationId, targetUUID) {
 		const conversation = new ClaudeConversation(orgId, conversationId);
-		const conversationData = await conversation.getData(false);
-		const allMessages = await conversation.getMessages(false);
+		const conversationData = await conversation.getData();
+		const allMessages = await conversation.getMessages();
 
 		// Extract up to targetUUID as ClaudeMessage[]
 		const messages = [];

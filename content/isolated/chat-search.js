@@ -299,7 +299,7 @@
 
 			const orgId = getOrgId();
 			conversation = new ClaudeConversation(orgId, conversationId);
-			await conversation.getData(true);
+			await conversation.getData();
 		} catch (error) {
 			console.error('Failed to fetch conversation:', error);
 			loadingModal.destroy();
