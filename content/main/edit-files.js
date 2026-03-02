@@ -829,38 +829,9 @@
 
 	async function createTempStyle(orgId, text) {
 		try {
-			// Create style without name (auto-generated)
-			const createResponse = await fetch(`/api/organizations/${orgId}/styles/create`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ prompt: text })
-			});
-
-			if (!createResponse.ok) {
-				const error = await createResponse.json();
-				throw new Error(error.message || 'Failed to create style');
-			}
-
-			const createData = await createResponse.json();
-			const styleId = createData.uuid;
-
-			// Now edit to set the name
-			const editResponse = await fetch(`/api/organizations/${orgId}/styles/${styleId}/edit`, {
-				method: 'PUT',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					prompt: text,
-					name: TEMP_STYLE_NAME
-				})
-			});
-
-			if (!editResponse.ok) {
-				const error = await editResponse.json();
-				throw new Error(error.message || 'Failed to name style');
-			}
-
-			setTempStyleId(styleId);
-			return styleId;
+			const style = await createStyle(orgId, text, TEMP_STYLE_NAME);
+			setTempStyleId(style.uuid);
+			return style.uuid;
 		} catch (error) {
 			console.error('Error creating temp style:', error);
 			throw error;
@@ -868,24 +839,7 @@
 	}
 
 	async function updateTempStyle(orgId, styleId, text) {
-		const response = await fetch(`/api/organizations/${orgId}/styles/${styleId}/edit`, {
-			method: 'PUT',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({
-				prompt: text,
-				name: TEMP_STYLE_NAME
-			})
-		});
-
-		if (!response.ok) {
-			const error = await response.json();
-			throw {
-				status: response.status,
-				message: error.message || 'Failed to update style'
-			};
-		}
-
-		return await response.json();
+		return await updateStyle(orgId, styleId, text, TEMP_STYLE_NAME);
 	}
 
 	async function ensureTempStyle(orgId, text) {

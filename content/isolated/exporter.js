@@ -1142,9 +1142,10 @@
 	}
 	//#endregion
 
-	async function exportSingleConversation(orgId, conversationId, format, extension, exportTree, exportOptions, loadingModal, cachedData = null) {
-		const conversation = new ClaudeConversation(orgId, conversationId, cachedData);
+	async function exportSingleConversation(orgId, conversationId, format, extension, exportTree, exportOptions, loadingModal) {
+		const conversation = new ClaudeConversation(orgId, conversationId);
 		const conversationData = await conversation.getData();
+		const wasCached = conversation.lastGetDataFromCache;
 		const messages = await conversation.getMessages(exportTree);
 		const safeName = (conversationData.name || 'untitled').replace(/[<>:"/\\|?*]/g, '_');
 		const filename = `Claude_export_${safeName}_${conversationId}.${extension}`;
@@ -1152,7 +1153,7 @@
 		const blob = exportContent instanceof Blob
 			? exportContent
 			: new Blob([exportContent], { type: 'text/plain' });
-		return { filename, blob, conversationData };
+		return { filename, blob, wasCached };
 	}
 
 	async function handleBulkExport(formatSelectValue, exportOptions, modal, projectId = null, exportTree = false, afterDate = null) {
@@ -1203,18 +1204,6 @@
 			const total = conversations.length;
 			const delayMs = Math.min(2000, 100 + total);
 
-			// Load export cache
-			const exportDB = window.ClaudeSearchShared?.exportDB;
-			let cachedMap = new Map();
-			if (exportDB) {
-				try {
-					const cached = await exportDB.getAll();
-					cachedMap = new Map(cached.map(c => [c.uuid, c]));
-				} catch (e) {
-					console.error('[Export] Failed to load cache:', e);
-				}
-			}
-
 			// Split into 2 chunks for parallel processing
 			const chunk1 = conversations.filter((_, i) => i % 2 === 0);
 			const chunk2 = conversations.filter((_, i) => i % 2 === 1);
@@ -1225,27 +1214,15 @@
 					if (bulkExportCancelled) return results;
 
 					const conv = chunk[i];
-					let cachedData = null;
 					try {
-						// Check cache
-						const cachedEntry = cachedMap.get(conv.uuid);
-						if (cachedEntry && cachedEntry.updated_at >= conv.updated_at) {
-							cachedData = cachedEntry.data;
-							//console.log(`[Export] Cache hit: ${conv.uuid}`);
-						}
-
-						const { filename, blob, conversationData } = await exportSingleConversation(
-							orgId, conv.uuid, format, extension, exportTree, exportOptions, loadingModal, cachedData
+						const { filename, blob, wasCached } = await exportSingleConversation(
+							orgId, conv.uuid, format, extension, exportTree, exportOptions, loadingModal
 						);
 						results.push({ filename, blob });
 
-						// Cache the conversation data on miss
-						if (!cachedData && exportDB && conversationData) {
-							try {
-								await exportDB.put(conv.uuid, conv.updated_at, conversationData);
-							} catch (e) {
-								console.error(`[Export] Failed to cache ${conv.uuid}:`, e);
-							}
+						// Only delay on cache miss (API call) to avoid rate limiting
+						if (!wasCached && i < chunk.length - 1) {
+							await new Promise(resolve => setTimeout(resolve, delayMs));
 						}
 					} catch (error) {
 						console.error(`Failed to export conversation ${conv.uuid}:`, error);
@@ -1253,11 +1230,6 @@
 
 					completed++;
 					loadingModal.setContent(createLoadingContent(`Exporting ${completed} of ${total} conversations...`));
-
-					// Only delay on cache miss (API call) to avoid rate limiting
-					if (!cachedData && i < chunk.length - 1) {
-						await new Promise(resolve => setTimeout(resolve, delayMs));
-					}
 				}
 				return results;
 			}

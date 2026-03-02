@@ -42,14 +42,42 @@ function getLocale() {
 // Initialize on load (fire and forget)
 fetchAndCacheLocale().then(locale => { _cachedLocale = locale; });
 
+// ======== Conversation cache accessors (auto-detect isolated vs MAIN world) ========
+let _convCacheMessageId = 0;
+
+async function _convCacheGet(uuid) {
+	const cache = window.ClaudeSearchShared?.conversationCache;
+	if (cache) return await cache.get(uuid);
+
+	// MAIN world: postMessage bridge
+	const messageId = ++_convCacheMessageId;
+	return new Promise((resolve) => {
+		const listener = (event) => {
+			if (event.source !== window) return;
+			if (event.data.type !== 'CONV_CACHE_RESULT' || event.data.messageId !== messageId) return;
+			window.removeEventListener('message', listener);
+			resolve(event.data.entry);
+		};
+		window.addEventListener('message', listener);
+		setTimeout(() => { window.removeEventListener('message', listener); resolve(null); }, 5000);
+		window.postMessage({ type: 'CONV_CACHE_GET', uuid, messageId }, '*');
+	});
+}
+
+async function _convCachePut(uuid, updatedAt, data) {
+	const cache = window.ClaudeSearchShared?.conversationCache;
+	if (cache) { await cache.put(uuid, updatedAt, data); return; }
+
+	// MAIN world: fire-and-forget postMessage
+	window.postMessage({ type: 'CONV_CACHE_PUT', uuid, updatedAt, data, messageId: ++_convCacheMessageId }, '*');
+}
+
 class ClaudeConversation {
-	constructor(orgId, conversationId = null, initialData = null) {
+	constructor(orgId, conversationId = null) {
 		this.orgId = orgId;
 		this.conversationId = conversationId;
 		this.created = conversationId ? true : false;
-		if (initialData) {
-			this.conversationData = initialData;
-		}
+		this.lastGetDataFromCache = false;
 	}
 
 	// Create a new conversation
@@ -225,17 +253,110 @@ class ClaudeConversation {
 	}
 
 	// Lazy load conversation data (always fetches full tree)
+	// Uses IndexedDB cache with streaming freshness check to avoid downloading large payloads
 	async getData(forceRefresh = false) {
-		if (!this.conversationData || forceRefresh) {
-			const response = await fetch(
-				`/api/organizations/${this.orgId}/chat_conversations/${this.conversationId}?tree=true&rendering_mode=messages&render_all_tools=true&skip_uuid_injection=true&consistency=strong`
-			);
-			if (!response.ok) {
-				throw new Error('Failed to get conversation data');
-			}
-			this.conversationData = await response.json();
+		if (this.conversationData && !forceRefresh) {
+			return this.conversationData;
 		}
+
+		const apiUrl = `/api/organizations/${this.orgId}/chat_conversations/${this.conversationId}?tree=true&rendering_mode=messages&render_all_tools=true&skip_uuid_injection=true&consistency=strong`;
+
+		// Try cache (unless forcing refresh)
+		if (!forceRefresh) {
+			try {
+				const cachedEntry = await _convCacheGet(this.conversationId);
+				console.log('Cache entry:', cachedEntry);
+				if (cachedEntry) {
+					const freshData = await this._streamingFreshnessCheck(apiUrl, cachedEntry);
+					if (freshData) {
+						this.conversationData = freshData;
+						return this.conversationData;
+					}
+				}
+			} catch (e) {
+				// Cache miss or streaming check failed — fall through to normal fetch
+			}
+		}
+
+		// Normal fetch path
+		this.lastGetDataFromCache = false;
+		const response = await fetch(apiUrl);
+		if (!response.ok) {
+			throw new Error('Failed to get conversation data');
+		}
+		this.conversationData = await response.json();
+
+		// Write to cache (fire-and-forget)
+		if (this.conversationData.updated_at) {
+			_convCachePut(this.conversationId, this.conversationData.updated_at, this.conversationData);
+		}
+
 		return this.conversationData;
+	}
+
+	// Stream the API response, extract updated_at from first few KB.
+	// If cache is still fresh, abort the stream and return cached data.
+	// Returns data (cached or freshly parsed) on success, null on failure.
+	async _streamingFreshnessCheck(apiUrl, cachedEntry) {
+		const response = await fetch(apiUrl);
+		if (!response.ok) return null;
+		console.log('Streaming freshness check started for conversation', this.conversationId);
+		const reader = response.body.getReader();
+		const decoder = new TextDecoder();
+		let accumulated = '';
+		const MAX_BYTES = 8192;
+
+		try {
+			while (accumulated.length < MAX_BYTES) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				accumulated += decoder.decode(value, { stream: true });
+				console.log('Accumulated chunk for freshness check:', accumulated);
+
+				// Only search for updated_at in the portion before chat_messages (top-level field)
+				const chatMsgIdx = accumulated.indexOf('"chat_messages"');
+				const searchRegion = chatMsgIdx !== -1 ? accumulated.substring(0, chatMsgIdx) : accumulated;
+				console.log('Search region for updated_at:', searchRegion);
+				const match = searchRegion.match(/"updated_at"\s*:\s*"([^"]+)"/);
+				console.log('updated_at match:', match);
+				if (match) {
+					const serverUpdatedAt = match[1];
+					console.log(`Cache updated_at: ${cachedEntry.updated_at}, Server updated_at: ${match[1]}`);
+					if (cachedEntry.updated_at >= serverUpdatedAt) {
+						// Cache is fresh — abort stream
+						reader.cancel();
+						this.lastGetDataFromCache = true;
+						return cachedEntry.data;
+					}
+					// Cache is stale — need to read the rest
+					break;
+				}
+
+				// If chat_messages appeared but no updated_at found before it, give up on cache check
+				if (chatMsgIdx !== -1) break;
+			}
+			console.log('Cache is stale or updated_at not found, reading full response from server');
+
+			// Read remaining stream and parse
+			const chunks = [accumulated];
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				chunks.push(decoder.decode(value, { stream: true }));
+			}
+			chunks.push(decoder.decode()); // flush
+
+			const data = JSON.parse(chunks.join(''));
+			this.lastGetDataFromCache = false;
+
+			if (data.updated_at) {
+				_convCachePut(this.conversationId, data.updated_at, data);
+			}
+			return data;
+		} catch (e) {
+			reader.cancel();
+			return null;
+		}
 	}
 
 	// Get messages - when tree=false, reconstructs the current trunk from full tree data
@@ -1430,6 +1551,57 @@ function getConversationId() {
 function getProjectId() {
 	const match = window.location.pathname.match(/\/project\/([a-f0-9-]+)/);
 	return match ? match[1] : null;
+}
+
+// ======== Style API ========
+
+async function listStyles(orgId) {
+	const response = await fetch(`/api/organizations/${orgId}/list_styles`);
+	if (!response.ok) {
+		throw new Error(`Failed to list styles: ${response.statusText}`);
+	}
+	return await response.json();
+}
+
+async function createStyle(orgId, prompt, name) {
+	const createResponse = await fetch(`/api/organizations/${orgId}/styles/create`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ prompt })
+	});
+
+	if (!createResponse.ok) {
+		const error = await createResponse.json();
+		throw new Error(error.message || 'Failed to create style');
+	}
+
+	const style = await createResponse.json();
+
+	if (name) {
+		return await updateStyle(orgId, style.uuid, prompt, name);
+	}
+
+	return style;
+}
+
+async function updateStyle(orgId, styleId, prompt, name) {
+	const body = { prompt };
+	if (name) body.name = name;
+
+	const response = await fetch(`/api/organizations/${orgId}/styles/${styleId}/edit`, {
+		method: 'PUT',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify(body)
+	});
+
+	if (!response.ok) {
+		const error = await response.json();
+		const err = new Error(error.message || 'Failed to update style');
+		err.status = response.status;
+		throw err;
+	}
+
+	return await response.json();
 }
 
 async function isLikelyTextFile(file) {

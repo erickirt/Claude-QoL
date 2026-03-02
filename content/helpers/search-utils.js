@@ -123,29 +123,59 @@
 	// Global database instance
 	window.ClaudeSearchShared.searchDB = new SearchDatabase();
 
-	// ======== EXPORT CACHE DB ========
-	const exportDB = new Dexie('ClaudeExportDB');
-	exportDB.version(1).stores({
+	// ======== CONVERSATION CACHE DB ========
+	const cacheDB = new Dexie('ClaudeExportDB'); // keep DB name for migration
+	cacheDB.version(1).stores({
 		conversations: 'uuid'  // stores { uuid, updated_at, data }
 	});
 
-	class ExportDatabase {
+	class ConversationCache {
 		async get(conversationId) {
-			return await exportDB.conversations.get(conversationId);
+			return await cacheDB.conversations.get(conversationId);
 		}
 
 		async put(conversationId, updatedAt, data) {
-			await exportDB.conversations.put({ uuid: conversationId, updated_at: updatedAt, data });
-		}
-
-		async getAll() {
-			return await exportDB.conversations.toArray();
+			await cacheDB.conversations.put({ uuid: conversationId, updated_at: updatedAt, data });
 		}
 
 		async delete(conversationId) {
-			await exportDB.conversations.delete(conversationId);
+			await cacheDB.conversations.delete(conversationId);
 		}
 	}
 
-	window.ClaudeSearchShared.exportDB = new ExportDatabase();
+	const conversationCache = new ConversationCache();
+	window.ClaudeSearchShared.conversationCache = conversationCache;
+
+	// PostMessage bridge for MAIN world access to conversation cache
+	window.addEventListener('message', async (event) => {
+		if (event.source !== window) return;
+
+		try {
+			switch (event.data.type) {
+				case 'CONV_CACHE_GET': {
+					const entry = await conversationCache.get(event.data.uuid);
+					window.postMessage({
+						type: 'CONV_CACHE_RESULT',
+						messageId: event.data.messageId,
+						entry: entry || null
+					}, '*');
+					break;
+				}
+				case 'CONV_CACHE_PUT': {
+					await conversationCache.put(event.data.uuid, event.data.updatedAt, event.data.data);
+					window.postMessage({
+						type: 'CONV_CACHE_STORED',
+						messageId: event.data.messageId
+					}, '*');
+					break;
+				}
+			}
+		} catch (error) {
+			window.postMessage({
+				type: 'CONV_CACHE_ERROR',
+				messageId: event.data.messageId,
+				error: error.message
+			}, '*');
+		}
+	});
 })();

@@ -40,14 +40,7 @@
 	async function fetchAvailableStyles() {
 		try {
 			const orgId = getOrgId();
-			const response = await fetch(`/api/organizations/${orgId}/list_styles`);
-
-			if (!response.ok) {
-				console.error('Failed to fetch styles:', response.statusText);
-				return [];
-			}
-
-			const data = await response.json();
+			const data = await listStyles(orgId);
 			const styles = [];
 
 			// Add "None" option first
