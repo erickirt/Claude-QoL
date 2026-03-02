@@ -7,36 +7,14 @@ const PHANTOM_MARKER = '====PHANTOM_MESSAGE====';
 const UUID_MARKER_PREFIX = '====UUID:';
 const UUID_MARKER_SUFFIX = '====';
 
-// ==== STORAGE FUNCTIONS (async, use IndexedDB via messages) ====
-async function storePhantomMessages(conversationId, messages) {
-	console.log(`[Phantom Messages] Storing ${messages.length} messages for conversation ${conversationId} in IndexedDB`);
-	return new Promise((resolve) => {
-		const handler = (event) => {
-			if (event.data.type === 'PHANTOM_MESSAGES_STORED' &&
-				event.data.conversationId === conversationId) {
-				window.removeEventListener('message', handler);
-				console.log(`[Phantom Messages] Stored messages for conversation ${conversationId} successfully`);
+// ==== STORAGE FUNCTIONS ====
+// storePhantomMessages, getPhantomMessages, clearPhantomMessages are defined in claude-api.js
+// They auto-detect isolated vs MAIN world and use the postMessage bridge when needed.
 
-				window.postMessage({
-					type: 'PHANTOM_MESSAGES_STORED_CONFIRMED',
-					conversationId
-				}, '*');
+// Wrap the raw accessor with localStorage migration and ClaudeMessage hydration
+const _rawGetPhantomMessages = getPhantomMessages;
 
-				resolve();
-			}
-		};
-
-		window.addEventListener('message', handler);
-
-		window.postMessage({
-			type: 'STORE_PHANTOM_MESSAGES_IDB',
-			conversationId,
-			phantomMessages: messages
-		}, '*');
-	});
-}
-
-async function getPhantomMessages(conversationId) {
+getPhantomMessages = async function(conversationId) {
 	// Check localStorage first and migrate if found
 	const oldKey = `${OLD_FORK_PREFIX}${conversationId}`;
 	const newKey = `${PHANTOM_PREFIX}${conversationId}`;
@@ -55,55 +33,13 @@ async function getPhantomMessages(conversationId) {
 		return messages;
 	}
 
-	// Get from IndexedDB
-	return new Promise((resolve) => {
-		const handler = (event) => {
-			if (event.data.type === 'PHANTOM_MESSAGES_RESPONSE' &&
-				event.data.conversationId === conversationId) {
-				window.removeEventListener('message', handler);
-				const messagesJson = event.data.messages;
-				if (messagesJson) {
-					resolve(messagesJson.map(json => new ClaudeMessage(conversation, json)));
-				} else {
-					resolve(null);
-				}
-			}
-		};
-
-		window.addEventListener('message', handler);
-		window.postMessage({
-			type: 'GET_PHANTOM_MESSAGES_IDB',
-			conversationId
-		}, '*');
-
-		setTimeout(() => {
-			window.removeEventListener('message', handler);
-			resolve(null);
-		}, 5000);
-	});
-}
-
-// Currently unused. But could be relevant later.
-async function clearPhantomMessages(conversationId) {
-	localStorage.removeItem(`${PHANTOM_PREFIX}${conversationId}`);
-	localStorage.removeItem(`${OLD_FORK_PREFIX}${conversationId}`);
-
-	return new Promise((resolve) => {
-		const handler = (event) => {
-			if (event.data.type === 'PHANTOM_MESSAGES_CLEARED' &&
-				event.data.conversationId === conversationId) {
-				window.removeEventListener('message', handler);
-				resolve();
-			}
-		};
-
-		window.addEventListener('message', handler);
-		window.postMessage({
-			type: 'CLEAR_PHANTOM_MESSAGES_IDB',
-			conversationId
-		}, '*');
-	});
-}
+	// Get from IndexedDB via accessor
+	const messagesJson = await _rawGetPhantomMessages(conversationId);
+	if (messagesJson) {
+		return messagesJson.map(json => new ClaudeMessage(conversation, json));
+	}
+	return null;
+};
 
 // ==== FETCH INTERCEPTOR ====
 const originalFetch = window.fetch;
@@ -299,16 +235,6 @@ function injectUUIDMarkers(data) {
 	});
 }
 
-
-// Listen for messages from ISOLATED world
-window.addEventListener('message', (event) => {
-	if (event.source !== window) return;
-
-	if (event.data.type === 'STORE_PHANTOM_MESSAGES') {
-		const { conversationId, phantomMessages } = event.data;
-		storePhantomMessages(conversationId, phantomMessages);
-	}
-});
 
 // Style phantom messages in the DOM
 function stylePhantomMessages() {

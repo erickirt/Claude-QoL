@@ -516,33 +516,9 @@ If this is a writing or creative discussion, include sections for characters, pl
 	}
 
 	async function getPhantomMessagesFromMain(conversationId) {
-		return new Promise((resolve) => {
-			const handler = (event) => {
-				if (event.data.type === 'PHANTOM_MESSAGES_RESPONSE' &&
-					event.data.conversationId === conversationId) {
-					window.removeEventListener('message', handler);
-					const messagesJson = event.data.messages || [];
-					// Convert raw JSON to ClaudeMessage instances
-					const conversation = new ClaudeConversation(getOrgId(), conversationId);
-					const messages = messagesJson.map(json =>
-						ClaudeMessage.fromHistoryJSON(conversation, json)
-					);
-					resolve(messages);
-				}
-			};
-
-			window.addEventListener('message', handler);
-			window.postMessage({
-				type: 'GET_PHANTOM_MESSAGES_IDB',
-				conversationId
-			}, '*');
-
-			// Timeout fallback
-			setTimeout(() => {
-				window.removeEventListener('message', handler);
-				resolve([]);
-			}, 5000);
-		});
+		const messagesJson = await getPhantomMessages(conversationId) || [];
+		const conversation = new ClaudeConversation(getOrgId(), conversationId);
+		return messagesJson.map(json => ClaudeMessage.fromHistoryJSON(conversation, json));
 	}
 	//#endregion
 
@@ -561,24 +537,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 	}
 
 	async function storePhantomMessagesAndWait(conversationId, messages) {
-		// Takes ClaudeMessage[], serializes via toHistoryJSON() for storage
-		return new Promise((resolve) => {
-			const handler = (event) => {
-				if (event.data.type === 'PHANTOM_MESSAGES_STORED_CONFIRMED' &&
-					event.data.conversationId === conversationId) {
-					window.removeEventListener('message', handler);
-					resolve();
-				}
-			};
-
-			window.addEventListener('message', handler);
-
-			window.postMessage({
-				type: 'STORE_PHANTOM_MESSAGES',
-				conversationId,
-				phantomMessages: messages.map(m => m.toHistoryJSON())
-			}, '*');
-		});
+		await storePhantomMessages(conversationId, messages.map(m => m.toHistoryJSON()));
 	}
 
 	function showFailedFilesModal(failedFiles, newUuid) {

@@ -614,24 +614,7 @@
 	}
 
 	async function storePhantomMessagesAndWait(conversationId, messages) {
-		// Takes ClaudeMessage[], serializes via toHistoryJSON() for storage
-		return new Promise((resolve) => {
-			const handler = (event) => {
-				if (event.data.type === 'PHANTOM_MESSAGES_STORED_CONFIRMED' &&
-					event.data.conversationId === conversationId) {
-					window.removeEventListener('message', handler);
-					resolve();
-				}
-			};
-
-			window.addEventListener('message', handler);
-
-			window.postMessage({
-				type: 'STORE_PHANTOM_MESSAGES',
-				conversationId,
-				phantomMessages: messages.map(m => m.toHistoryJSON())
-			}, '*');
-		});
+		await storePhantomMessages(conversationId, messages.map(m => m.toHistoryJSON()));
 	}
 
 	async function finalizeImport(name, messages, model, zipFiles = null, loadingModal = null, settings = null) {

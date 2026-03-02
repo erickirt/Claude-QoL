@@ -42,34 +42,61 @@ function getLocale() {
 // Initialize on load (fire and forget)
 fetchAndCacheLocale().then(locale => { _cachedLocale = locale; });
 
-// ======== Conversation cache accessors (auto-detect isolated vs MAIN world) ========
-let _convCacheMessageId = 0;
+// ======== DB accessors (auto-detect isolated vs MAIN world) ========
+let _bridgeMessageId = 0;
+
+function _bridgeRequest(type, data, responseType, timeout = 5000) {
+	const messageId = ++_bridgeMessageId;
+	return new Promise((resolve) => {
+		const listener = (event) => {
+			if (event.source !== window) return;
+			if (event.data.messageId !== messageId) return;
+			if (event.data.type !== responseType && event.data.type !== 'BRIDGE_ERROR') return;
+			window.removeEventListener('message', listener);
+			resolve(event.data);
+		};
+		window.addEventListener('message', listener);
+		setTimeout(() => { window.removeEventListener('message', listener); resolve(null); }, timeout);
+		window.postMessage({ type, messageId, ...data }, '*');
+	});
+}
 
 async function _convCacheGet(uuid) {
 	const cache = window.ClaudeSearchShared?.conversationCache;
 	if (cache) return await cache.get(uuid);
 
-	// MAIN world: postMessage bridge
-	const messageId = ++_convCacheMessageId;
-	return new Promise((resolve) => {
-		const listener = (event) => {
-			if (event.source !== window) return;
-			if (event.data.type !== 'CONV_CACHE_RESULT' || event.data.messageId !== messageId) return;
-			window.removeEventListener('message', listener);
-			resolve(event.data.entry);
-		};
-		window.addEventListener('message', listener);
-		setTimeout(() => { window.removeEventListener('message', listener); resolve(null); }, 5000);
-		window.postMessage({ type: 'CONV_CACHE_GET', uuid, messageId }, '*');
-	});
+	const result = await _bridgeRequest('CONV_CACHE_GET', { uuid }, 'CONV_CACHE_RESULT');
+	return result?.entry || null;
 }
 
 async function _convCachePut(uuid, updatedAt, data) {
 	const cache = window.ClaudeSearchShared?.conversationCache;
 	if (cache) { await cache.put(uuid, updatedAt, data); return; }
 
-	// MAIN world: fire-and-forget postMessage
-	window.postMessage({ type: 'CONV_CACHE_PUT', uuid, updatedAt, data, messageId: ++_convCacheMessageId }, '*');
+	window.postMessage({ type: 'CONV_CACHE_PUT', uuid, updatedAt, data, messageId: ++_bridgeMessageId }, '*');
+}
+
+async function storePhantomMessages(conversationId, messages) {
+	const store = window.ClaudeSearchShared?.storePhantomMessages;
+	if (store) { await store(conversationId, messages); return; }
+
+	const result = await _bridgeRequest('PHANTOM_STORE', { conversationId, messages }, 'PHANTOM_STORED');
+	return result;
+}
+
+async function getPhantomMessages(conversationId) {
+	const get = window.ClaudeSearchShared?.getPhantomMessages;
+	if (get) return await get(conversationId);
+
+	const result = await _bridgeRequest('PHANTOM_GET', { conversationId }, 'PHANTOM_RESULT');
+	return result?.messages || null;
+}
+
+async function clearPhantomMessages(conversationId) {
+	const clear = window.ClaudeSearchShared?.clearPhantomMessages;
+	if (clear) { await clear(conversationId); return; }
+
+	await _bridgeRequest('PHANTOM_CLEAR', { conversationId }, 'PHANTOM_CLEARED');
 }
 
 class ClaudeConversation {
