@@ -55,6 +55,7 @@
 	// ======== ENCRYPTION ========
 	const ENCRYPTION_KEY_PREFIX = 'QOL_ENCRYPT_NODELETE_';
 	let _encryptionKeyPromise = null;
+	let _keyHash = null; // first 8 hex chars of SHA-256 of the raw key
 
 	function getEncryptionKey() {
 		if (!_encryptionKeyPromise) {
@@ -63,16 +64,61 @@
 		return _encryptionKeyPromise;
 	}
 
+	async function _computeKeyHash(rawKey) {
+		const hash = await crypto.subtle.digest('SHA-256', rawKey);
+		const hex = [...new Uint8Array(hash)].map(b => b.toString(16).padStart(2, '0')).join('');
+		return hex.substring(0, 8);
+	}
+
+	// Encrypt: returns { v: 1, keyHash, data: base64(iv + ciphertext) }
+	async function encryptData(data) {
+		const key = await getEncryptionKey();
+		if (!key) return data; // plaintext passthrough
+
+		const iv = crypto.getRandomValues(new Uint8Array(12));
+		const encoded = new TextEncoder().encode(JSON.stringify(data));
+		const ciphertext = await crypto.subtle.encrypt(
+			{ name: 'AES-GCM', iv }, key, encoded
+		);
+		const combined = new Uint8Array(iv.length + ciphertext.byteLength);
+		combined.set(iv);
+		combined.set(new Uint8Array(ciphertext), iv.length);
+		return { v: 1, keyHash: _keyHash, data: btoa(String.fromCharCode(...combined)) };
+	}
+
+	// Decrypt: detects per-item format
+	async function decryptData(item) {
+		// Plaintext passthrough — not an encrypted wrapper
+		if (!item || typeof item !== 'object' || !item.v || !item.keyHash) {
+			return item;
+		}
+
+		const key = await getEncryptionKey();
+
+		// Key mismatch or no key available — item is unrecoverable
+		if (!key || item.keyHash !== _keyHash) {
+			throw new Error(`Key mismatch: item encrypted with ${item.keyHash}, current key is ${_keyHash || 'none'}`);
+		}
+
+		const combined = Uint8Array.from(atob(item.data), c => c.charCodeAt(0));
+		const iv = combined.slice(0, 12);
+		const ciphertext = combined.slice(12);
+		const decrypted = await crypto.subtle.decrypt(
+			{ name: 'AES-GCM', iv }, key, ciphertext
+		);
+		return JSON.parse(new TextDecoder().decode(decrypted));
+	}
+
 	async function _initEncryptionKey() {
 		let stylesData;
 		try {
 			stylesData = await listStyles(getOrgId());
 		} catch (e) {
-			_encryptionKeyPromise = null; // allow retry on next call
-			throw new Error('Failed to fetch styles for encryption key: ' + e.message);
+			console.warn('[Encryption] Failed to fetch styles, operating in plaintext mode:', e.message);
+			return null;
 		}
 
-		// Search custom styles for our key
+		// Search styles for our key
 		const allStyles = [
 			...(stylesData.defaultStyles || []),
 			...(stylesData.customStyles || [])
@@ -82,52 +128,25 @@
 		if (keyStyle) {
 			const base64Key = keyStyle.name.substring(ENCRYPTION_KEY_PREFIX.length);
 			const rawKey = Uint8Array.from(atob(base64Key), c => c.charCodeAt(0));
+			_keyHash = await _computeKeyHash(rawKey);
 			return await crypto.subtle.importKey(
 				'raw', rawKey, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']
 			);
 		}
 
-		// Key not found but API succeeded — clear all databases and create new key
-		console.log('[Encryption] No encryption key found, clearing databases and generating new key');
-		await Promise.allSettled([
-			Dexie.delete('ClaudeSearchDB'),
-			Dexie.delete('ClaudeExportDB'),
-			Dexie.delete('ClaudePhantomMessagesDB')
-		]);
-
-		const rawKey = crypto.getRandomValues(new Uint8Array(16)); // 128-bit
-		const base64Key = btoa(String.fromCharCode(...rawKey)).replace(/=+$/, '');
-		const styleName = ENCRYPTION_KEY_PREFIX + base64Key;
-
-		await createStyle(getOrgId(), 'Encryption key for Claude Toolbox cache', styleName);
-
-		return await crypto.subtle.importKey(
-			'raw', rawKey, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']
-		);
-	}
-
-	async function encryptData(data) {
-		const key = await getEncryptionKey();
-		const iv = crypto.getRandomValues(new Uint8Array(12));
-		const encoded = new TextEncoder().encode(JSON.stringify(data));
-		const ciphertext = await crypto.subtle.encrypt(
-			{ name: 'AES-GCM', iv }, key, encoded
-		);
-		const result = new Uint8Array(iv.length + ciphertext.byteLength);
-		result.set(iv);
-		result.set(new Uint8Array(ciphertext), iv.length);
-		return result.buffer;
-	}
-
-	async function decryptData(buffer) {
-		const key = await getEncryptionKey();
-		const arr = new Uint8Array(buffer);
-		const iv = arr.slice(0, 12);
-		const ciphertext = arr.slice(12);
-		const decrypted = await crypto.subtle.decrypt(
-			{ name: 'AES-GCM', iv }, key, ciphertext
-		);
-		return JSON.parse(new TextDecoder().decode(decrypted));
+		// No key in styles — try to create one
+		try {
+			const rawKey = crypto.getRandomValues(new Uint8Array(16)); // 128-bit
+			const base64Key = btoa(String.fromCharCode(...rawKey)).replace(/=+$/, '');
+			await createStyle(getOrgId(), 'Encryption key for Claude Toolbox cache', ENCRYPTION_KEY_PREFIX + base64Key);
+			_keyHash = await _computeKeyHash(rawKey);
+			return await crypto.subtle.importKey(
+				'raw', rawKey, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']
+			);
+		} catch (e) {
+			console.warn('[Encryption] Failed to create key style, operating in plaintext mode:', e.message);
+			return null;
+		}
 	}
 
 	// Expose for use by other scripts
@@ -189,7 +208,14 @@
 			if (!result || !result.searchableText) return null;
 
 			try {
-				return await decryptData(result.searchableText);
+				const raw = result.searchableText;
+				const decrypted = await decryptData(raw);
+				// Encrypt-on-read: if stored as plaintext and we have a key, re-encrypt
+				if (!raw?.v && _keyHash) {
+					const encrypted = await encryptData(decrypted);
+					await db.messages.put({ uuid: conversationId, searchableText: encrypted });
+				}
+				return decrypted;
 			} catch (e) {
 				console.warn(`[Encryption] Decryption failed for messages ${conversationId}, deleting entry`);
 				await db.messages.delete(conversationId);
@@ -202,8 +228,14 @@
 			const results = [];
 			for (const entry of all) {
 				try {
-					const searchableText = await decryptData(entry.searchableText);
-					results.push({ uuid: entry.uuid, searchableText });
+					const raw = entry.searchableText;
+					const decrypted = await decryptData(raw);
+					// Encrypt-on-read
+					if (!raw?.v && _keyHash) {
+						const encrypted = await encryptData(decrypted);
+						await db.messages.put({ uuid: entry.uuid, searchableText: encrypted });
+					}
+					results.push({ uuid: entry.uuid, searchableText: decrypted });
 				} catch (e) {
 					console.warn(`[Encryption] Decryption failed for messages ${entry.uuid}, deleting entry`);
 					await db.messages.delete(entry.uuid);
@@ -237,7 +269,13 @@
 			if (!entry || !entry.data) return null;
 
 			try {
-				const decryptedData = await decryptData(entry.data);
+				const raw = entry.data;
+				const decryptedData = await decryptData(raw);
+				// Encrypt-on-read
+				if (!raw?.v && _keyHash) {
+					const encrypted = await encryptData(decryptedData);
+					await cacheDB.conversations.put({ uuid: entry.uuid, updated_at: entry.updated_at, data: encrypted });
+				}
 				return { uuid: entry.uuid, updated_at: entry.updated_at, data: decryptedData };
 			} catch (e) {
 				console.warn(`[Encryption] Decryption failed for cache ${conversationId}, deleting entry`);
@@ -275,7 +313,13 @@
 		if (!result || !result.encryptedData) return null;
 
 		try {
-			const decrypted = await decryptData(result.encryptedData);
+			const raw = result.encryptedData;
+			const decrypted = await decryptData(raw);
+			// Encrypt-on-read
+			if (!raw?.v && _keyHash) {
+				const encrypted = await encryptData(decrypted);
+				await phantomDB.phantomMessages.put({ conversationId, encryptedData: encrypted });
+			}
 			return decrypted.messages;
 		} catch (e) {
 			console.warn(`[Encryption] Decryption failed for phantom ${conversationId}, deleting entry`);
