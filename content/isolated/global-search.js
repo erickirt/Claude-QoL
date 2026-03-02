@@ -509,22 +509,20 @@
 			return;
 		}
 
-		// Find the container with "X chats with Claude"
-		const containers = document.querySelectorAll('.flex.items-center.z-header.h-12');
-		let targetContainer = null;
-
-		for (const container of containers) {
-			if (container.textContent.includes('chats with Claude')) {
-				targetContainer = container;
+		// Find the header by locating the /new link whose flex parent also contains an h1
+		let headerContainer = null;
+		for (const link of document.querySelectorAll('a[href="/new"]')) {
+			const flex = link.closest('.flex.items-center');
+			if (flex && flex.querySelector('h1')) {
+				headerContainer = flex;
 				break;
 			}
 		}
+		if (!headerContainer) return;
 
-		if (!targetContainer) return;
-
-		// Create toggle container - use ml-auto to push to right without affecting other elements
+		// Create toggle container - place it in the header
 		const toggleContainer = document.createElement('div');
-		toggleContainer.className = 'flex items-center gap-2 global-search-toggle ml-auto shrink-0';
+		toggleContainer.className = 'flex items-center gap-2 global-search-toggle shrink-0';
 
 		// Labels
 		const titleLabel = document.createElement('span');
@@ -561,8 +559,9 @@
 		toggleContainer.appendChild(toggle.container);
 		toggleContainer.appendChild(textLabel);
 
-		// Add to page - DON'T modify parent's classes
-		targetContainer.appendChild(toggleContainer);
+		// Insert after the h1 in the header
+		const heading = headerContainer.querySelector('h1');
+		heading.after(toggleContainer);
 	}
 
 	// ======== INITIALIZATION ========
