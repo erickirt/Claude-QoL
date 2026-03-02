@@ -66,7 +66,7 @@
 				data.customStyles.forEach(style => {
 					// Skip our temporary style and encryption key style
 					if (style.name === 'advanced_edit_temporary_style' ||
-						(style.name && style.name.startsWith('QOL_ENCRYPTION_KEY_DO_NOT_DELETE_'))) {
+						(style.name && style.name.startsWith('QOL_ENCRYPT_NODELETE_'))) {
 						return;
 					}
 					styles.push({

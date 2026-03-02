@@ -53,7 +53,7 @@
 	};
 
 	// ======== ENCRYPTION ========
-	const ENCRYPTION_KEY_PREFIX = 'QOL_ENCRYPTION_KEY_DO_NOT_DELETE_';
+	const ENCRYPTION_KEY_PREFIX = 'QOL_ENCRYPT_NODELETE_';
 	let _encryptionKeyPromise = null;
 
 	function getEncryptionKey() {

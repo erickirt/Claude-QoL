@@ -893,7 +893,7 @@
 			if (data.customStyles) {
 				data.customStyles = data.customStyles.filter(
 					style => style.name !== TEMP_STYLE_NAME &&
-						!(style.name && style.name.startsWith('QOL_ENCRYPTION_KEY_DO_NOT_DELETE_'))
+						!(style.name && style.name.startsWith('QOL_ENCRYPT_NODELETE_'))
 				);
 			}
 
