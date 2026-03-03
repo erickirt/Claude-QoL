@@ -139,9 +139,11 @@
 			const base64Key = keyStyle.name.substring(ENCRYPTION_KEY_PREFIX.length);
 			const rawKey = Uint8Array.from(atob(base64Key), c => c.charCodeAt(0));
 			_keyHash = await _computeKeyHash(rawKey);
-			return await crypto.subtle.importKey(
+			const key = await crypto.subtle.importKey(
 				'raw', rawKey, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']
 			);
+			_bulkEncryptAll(); // fire-and-forget
+			return key;
 		}
 
 		// No key in styles — try to create one
@@ -151,9 +153,11 @@
 			try {
 				await createStyle(getOrgId(), 'Encryption key for Claude Toolbox cache', ENCRYPTION_KEY_PREFIX + base64Key);
 				_keyHash = await _computeKeyHash(rawKey);
-				return await crypto.subtle.importKey(
+				const key = await crypto.subtle.importKey(
 					'raw', rawKey, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']
 				);
+				_bulkEncryptAll(); // fire-and-forget
+				return key;
 			} catch (e) {
 				if (attempt < 9) {
 					console.warn(`[Encryption] Failed to create key style (attempt ${attempt + 1}/10), retrying...`);
@@ -347,6 +351,38 @@
 
 	async function clearPhantomMessagesDB(conversationId) {
 		await phantomDB.phantomMessages.delete(conversationId);
+	}
+
+	async function _bulkEncryptAll() {
+		try {
+			// Encrypt all plaintext messages
+			const allMessages = await db.messages.toArray();
+			for (const row of allMessages) {
+				if (!row.searchableText?.v && _keyHash) {
+					const encrypted = await encryptData(row.searchableText);
+					await db.messages.put({ uuid: row.uuid, searchableText: encrypted });
+				}
+			}
+			// Encrypt all plaintext conversation cache entries
+			const allConvos = await cacheDB.conversations.toArray();
+			for (const row of allConvos) {
+				if (!row.data?.v && _keyHash) {
+					const encrypted = await encryptData(row.data);
+					await cacheDB.conversations.put({ uuid: row.uuid, updated_at: row.updated_at, data: encrypted });
+				}
+			}
+			// Encrypt all plaintext phantom messages
+			const allPhantom = await phantomDB.phantomMessages.toArray();
+			for (const row of allPhantom) {
+				if (!row.encryptedData?.v && _keyHash) {
+					const encrypted = await encryptData(row.encryptedData);
+					await phantomDB.phantomMessages.put({ conversationId: row.conversationId, encryptedData: encrypted });
+				}
+			}
+			console.log('[Encryption] Bulk migration complete.');
+		} catch (e) {
+			console.warn('[Encryption] Bulk migration error:', e.message);
+		}
 	}
 
 	// Expose for direct use in isolated world
