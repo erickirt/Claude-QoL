@@ -515,6 +515,183 @@ class ClaudeConversation {
 		return textPieces.join('\n');
 	}
 
+	static cleanupMessages(messages, conversation = null) {
+		const conv = conversation || new ClaudeConversation(getOrgId(), null);
+		const cleaned = [...messages];
+
+		let i = 0;
+		while (i < cleaned.length) {
+			const msg = cleaned[i];
+			const text = msg.content?.[0]?.text || '';
+
+			if (text === '[Continued attachments from previous message]') {
+				const expectedAckSender = msg.sender === 'human' ? 'assistant' : 'human';
+				const prevMsg = cleaned[i - 1];
+				const prevText = prevMsg?.content?.[0]?.text || '';
+
+				const hasPrevAck = i > 0 &&
+					prevMsg.sender === expectedAckSender &&
+					prevText === 'Acknowledged.';
+
+				if (hasPrevAck) {
+					cleaned.splice(i - 1, 2);
+					i--;
+				} else {
+					cleaned.splice(i, 1);
+				}
+			} else {
+				i++;
+			}
+		}
+
+		i = 0;
+		while (i < cleaned.length - 1) {
+			const current = cleaned[i];
+			const next = cleaned[i + 1];
+
+			if (current.sender === next.sender) {
+				const fillerSender = current.sender === 'human' ? 'assistant' : 'human';
+				const fillerText = fillerSender === 'assistant' ? 'Acknowledged.' : 'Continue.';
+
+				const fillerMessage = new ClaudeMessage(conv);
+				fillerMessage.uuid = crypto.randomUUID();
+				fillerMessage.parent_message_uuid = current.uuid;
+				fillerMessage.sender = fillerSender;
+				fillerMessage.text = fillerText;
+				fillerMessage.created_at = current.created_at || new Date().toISOString();
+
+				next.parent_message_uuid = fillerMessage.uuid;
+
+				cleaned.splice(i + 1, 0, fillerMessage);
+				i += 2;
+			} else {
+				i++;
+			}
+		}
+
+		return cleaned;
+	}
+
+	static buildChatlog(messages, { includeRoleLabels = false, includeHeader = false, cleanup = true, conversation = null } = {}) {
+		if (includeRoleLabels && includeHeader) {
+			throw new Error('buildChatlog: includeRoleLabels and includeHeader are mutually exclusive');
+		}
+
+		const finalMessages = cleanup
+			? ClaudeConversation.cleanupMessages(messages, conversation)
+			: messages;
+
+		const separator = '\n\n';
+		const messageParts = finalMessages.map(msg => {
+			const role = msg.sender === 'human' ? '[User]' : '[Assistant]';
+			const text = msg.toChatlogString();
+			return includeRoleLabels ? `${role}\n${text}` : text;
+		});
+
+		const chatlogText = messageParts.join(separator);
+
+		if (includeHeader) {
+			const deltas = [0];
+			for (let i = 1; i < messageParts.length; i++) {
+				deltas.push(messageParts[i - 1].length + separator.length);
+			}
+			const header = `[CLEXP:MSG_HEADER:${deltas.join(',')}]`;
+			return { text: header + '\n' + chatlogText, filename: 'chatlog.txt' };
+		}
+
+		return { text: chatlogText, filename: 'chatlog.txt' };
+	}
+
+	static parseChatlogHeader(chatlogText) {
+		const match = chatlogText.match(/^\[CLEXP:MSG_HEADER:([^\]]+)\]\n/);
+		if (!match) return null;
+
+		const deltas = match[1].split(',').map(n => parseInt(n));
+		const body = chatlogText.substring(match[0].length);
+
+		const offsets = [];
+		let pos = 0;
+		for (const delta of deltas) {
+			pos += delta;
+			offsets.push(pos);
+		}
+
+		const messageTexts = [];
+		for (let i = 0; i < offsets.length; i++) {
+			const start = offsets[i];
+			const end = i < offsets.length - 1 ? offsets[i + 1] - 2 : body.length;
+			messageTexts.push(body.substring(start, end));
+		}
+
+		return messageTexts;
+	}
+
+	static fromChatlog(chatlogText, summaryTexts = []) {
+		const messageTexts = ClaudeConversation.parseChatlogHeader(chatlogText);
+		if (!messageTexts || messageTexts.length === 0) return null;
+
+		const conv = new ClaudeConversation(getOrgId(), null);
+		const timestamp = new Date().toISOString();
+		const chatMessages = [];
+
+		let parentId = '00000000-0000-4000-8000-000000000000';
+
+		for (const summaryText of summaryTexts) {
+			const userMsg = new ClaudeMessage(conv);
+			userMsg.uuid = crypto.randomUUID();
+			userMsg.parent_message_uuid = parentId;
+			userMsg.sender = 'human';
+			userMsg.created_at = timestamp;
+			userMsg.content = [{ type: 'text', text: summaryText }];
+			parentId = userMsg.uuid;
+			chatMessages.push(userMsg.toHistoryJSON());
+
+			const ackMsg = new ClaudeMessage(conv);
+			ackMsg.uuid = crypto.randomUUID();
+			ackMsg.parent_message_uuid = parentId;
+			ackMsg.sender = 'assistant';
+			ackMsg.created_at = timestamp;
+			ackMsg.content = [{
+				type: 'text',
+				text: 'Acknowledged. I understand the context from the summary and am ready to continue our conversation.'
+			}];
+			parentId = ackMsg.uuid;
+			chatMessages.push(ackMsg.toHistoryJSON());
+		}
+
+		for (let i = 0; i < messageTexts.length; i++) {
+			const msg = new ClaudeMessage(conv);
+			msg.uuid = crypto.randomUUID();
+			msg.parent_message_uuid = parentId;
+			msg.sender = i % 2 === 0 ? 'human' : 'assistant';
+			msg.created_at = timestamp;
+
+			let text = messageTexts[i];
+
+			// Extract inline attachments
+			const attachmentRegex = /\[CLEXP:ATT:([^\]]+)\]\n([\s\S]*?)\n\[\/CLEXP:ATT:\1\]/g;
+			let match;
+			while ((match = attachmentRegex.exec(text)) !== null) {
+				msg.attachFile(ClaudeAttachment.fromText(match[2], match[1]));
+			}
+
+			text = text.replace(attachmentRegex, '').trim();
+			msg.content = [{ type: 'text', text }];
+
+			parentId = msg.uuid;
+			chatMessages.push(msg.toHistoryJSON());
+		}
+
+		conv.conversationData = {
+			chat_messages: chatMessages,
+			current_leaf_message_uuid: chatMessages.at(-1).uuid,
+			name: 'Reconstructed from chatlog',
+			updated_at: timestamp
+		};
+
+		return conv;
+	}
+
 	generateUuid() {
 		return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
 			const r = Math.random() * 16 | 0;
@@ -1131,7 +1308,7 @@ class ClaudeMessage {
 		// Format files
 		for (const f of this._files) {
 			if (f instanceof ClaudeAttachment) {
-				parts.push(`<${f.file_name}>\n${f.extracted_content}\n</${f.file_name}>`);
+				parts.push(`[CLEXP:ATT:${f.file_name}]\n${f.extracted_content}\n[/CLEXP:ATT:${f.file_name}]`);
 			} else {
 				parts.push(`[File: ${f.file_name} (${f.file_kind})]`);
 			}

@@ -302,12 +302,12 @@ If this is a writing or creative discussion, include sections for characters, pl
 							// First toKeep message points to last carried-over phantom
 							toKeep[0].parent_message_uuid = phantomsToCarryOver.at(-1).uuid;
 
-							forkAttachments.push(getChatlogFromMessages(toKeep, false));
+							forkAttachments.push(ClaudeConversation.buildChatlog(toKeep, { includeHeader: true }));
 						}
 					} else if (toKeep.length > 0) {
 						// Original behavior when no phantoms to carry over
 						toKeep[0].parent_message_uuid = summaryMsgs.at(-1).uuid;
-						forkAttachments.push(getChatlogFromMessages(toKeep, false));
+						forkAttachments.push(ClaudeConversation.buildChatlog(toKeep, { includeHeader: true }));
 					}
 
 					// Build final message array: summaries -> carried phantoms -> kept real messages
@@ -317,7 +317,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 				// No summarization - full chatlog
 				// Filter messages based on toggles (affects both chatlog and phantom messages)
 				messages = filterMessagesForChatlog(messages, pendingFork.includeAttachments, pendingFork.includeToolCalls);
-				forkAttachments = [getChatlogFromMessages(messages, false)];
+				forkAttachments = [ClaudeConversation.buildChatlog(messages, { includeHeader: true })];
 
 				// 100% verbatim: carry over ALL existing phantoms
 				if (existingPhantoms.length > 0) {
@@ -423,67 +423,6 @@ If this is a writing or creative discussion, include sections for characters, pl
 		};
 	}
 
-	function cleanupMessages(messages, conversation) {
-		// Takes ClaudeMessage[], creates ClaudeMessage instances for filler messages
-		const cleaned = [...messages];
-
-		// Step 1: Remove synthetic normalization pairs
-		let i = 0;
-		while (i < cleaned.length) {
-			const msg = cleaned[i];
-			const text = msg.content?.[0]?.text || '';
-
-			if (text === '[Continued attachments from previous message]') {
-				const expectedAckSender = msg.sender === 'human' ? 'assistant' : 'human';
-				const prevMsg = cleaned[i - 1];
-				const prevText = prevMsg?.content?.[0]?.text || '';
-
-				const hasPrevAck = i > 0 &&
-					prevMsg.sender === expectedAckSender &&
-					prevText === 'Acknowledged.';
-
-				if (hasPrevAck) {
-					cleaned.splice(i - 1, 2);
-					i--;
-				} else {
-					cleaned.splice(i, 1);
-				}
-			} else {
-				i++;
-			}
-		}
-
-		// Step 2: Fix consecutive same-sender messages
-		i = 0;
-		while (i < cleaned.length - 1) {
-			const current = cleaned[i];
-			const next = cleaned[i + 1];
-
-			if (current.sender === next.sender) {
-				const fillerSender = current.sender === 'human' ? 'assistant' : 'human';
-				const fillerText = fillerSender === 'assistant' ? 'Acknowledged.' : 'Continue.';
-
-				// Create ClaudeMessage instance for filler
-				const fillerMessage = new ClaudeMessage(conversation);
-				fillerMessage.uuid = crypto.randomUUID();
-				fillerMessage.parent_message_uuid = current.uuid;
-				fillerMessage.sender = fillerSender;
-				fillerMessage.text = fillerText;
-				fillerMessage.created_at = current.created_at || new Date().toISOString();
-
-				// Fix next message's parent to point to filler
-				next.parent_message_uuid = fillerMessage.uuid;
-
-				cleaned.splice(i + 1, 0, fillerMessage);
-				i += 2;
-			} else {
-				i++;
-			}
-		}
-
-		return cleaned;
-	}
-
 	function filterMessagesForChatlog(messages, includeFiles, includeToolCalls) {
 		// Use ClaudeMessage methods in-place
 		for (const msg of messages) {
@@ -495,24 +434,6 @@ If this is a writing or creative discussion, include sections for characters, pl
 			}
 		}
 		return messages;
-	}
-
-	function getChatlogFromMessages(messages, includeRoleLabels = true, conversation = null) {
-		// Create temporary conversation if not provided (for filler messages)
-		const conv = conversation || new ClaudeConversation(getOrgId(), null);
-		const cleaned = cleanupMessages(messages, conv);
-
-		const chatlogText = cleaned.map(msg => {
-			const role = msg.sender === 'human' ? '[User]' : '[Assistant]';
-			const text = msg.toChatlogString();
-			return includeRoleLabels ? `${role}\n${text}` : text;
-		}).join('\n\n');
-
-		// Return simple {text, filename} - callers should use addFile() to create proper file type
-		return {
-			text: chatlogText,
-			filename: "chatlog.txt"
-		};
 	}
 
 	async function getPhantomMessagesFromMain(conversationId) {
@@ -572,7 +493,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 		const { conversation: conv, restoreSettings } = await ensureSettingsState(conversation, pendingFork.sourceSettings);
 		conversation = conv;
 
-		await storePhantomMessagesAndWait(conversation.conversationId, cleanupMessages(messages, conversation));
+		await storePhantomMessagesAndWait(conversation.conversationId, ClaudeConversation.cleanupMessages(messages, conversation));
 
 		// Build the message to send
 		const forkMessage = new ClaudeMessage(conversation);
@@ -727,7 +648,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 		}
 
 		// Add chatlog (conversation metadata - force inline)
-		const chatlogAtt = getChatlogFromMessages(messages, true);
+		const chatlogAtt = ClaudeConversation.buildChatlog(messages, { includeRoleLabels: true });
 		await summaryMessage.addFile(chatlogAtt.text, chatlogAtt.filename, true);
 
 		// Re-upload files using addFile()
@@ -1252,7 +1173,7 @@ Provide the complete rewritten summary.`;
 					}
 
 					// Add chatlog (conversation metadata - force inline)
-					const chatlogAtt = getChatlogFromMessages(chunk, true);
+					const chatlogAtt = ClaudeConversation.buildChatlog(chunk, { includeRoleLabels: true });
 					await rewriteMessage.addFile(chatlogAtt.text, chatlogAtt.filename, true);
 
 					// Re-upload files using addFile()

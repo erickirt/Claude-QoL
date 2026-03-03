@@ -658,9 +658,7 @@
 		}
 
 		// Build chatlog content from messages
-		const cleanedContent = messages
-			.map(msg => msg.toChatlogString())
-			.join('\n\n');
+		const { text: cleanedContent } = ClaudeConversation.buildChatlog(messages, { includeHeader: true });
 
 		// Remove ClaudeAttachments from importMessage - they're inline in chatlog
 		for (const f of [...importMessage.files]) {

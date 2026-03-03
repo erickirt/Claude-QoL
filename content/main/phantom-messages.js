@@ -14,7 +14,7 @@ const UUID_MARKER_SUFFIX = '====';
 // Wrap the raw accessor with localStorage migration and ClaudeMessage hydration
 const _rawGetPhantomMessages = getPhantomMessages;
 
-getPhantomMessages = async function(conversationId) {
+getPhantomMessages = async function (conversationId) {
 	// Check localStorage first and migrate if found
 	const oldKey = `${OLD_FORK_PREFIX}${conversationId}`;
 	const newKey = `${PHANTOM_PREFIX}${conversationId}`;
@@ -73,7 +73,43 @@ window.fetch = async (...args) => {
 			const response = await originalFetch(...args);
 			const conversationData = await response.json();
 
-			const phantomMessages = await getPhantomMessages(conversationId);
+			let phantomMessages = await getPhantomMessages(conversationId);
+
+			if (!phantomMessages || phantomMessages.length === 0) {
+				const firstHuman = conversationData.chat_messages?.find(m => m.sender === 'human');
+				if (firstHuman) {
+					const attachments = firstHuman.attachments || [];
+
+					const chatlogAtt = attachments.find(
+						a => a.file_name === 'chatlog.txt' &&
+							a.extracted_content?.startsWith('[CLEXP:MSG_HEADER:')
+					);
+
+					if (chatlogAtt) {
+						console.warn('No phantom messages found for conversation, attempting reconstruction from attachments');
+						const summaryTexts = attachments
+							.filter(a => a.file_name?.match(/^summary_chunk_\d+\.txt$/))
+							.sort((a, b) => {
+								const numA = parseInt(a.file_name.match(/\d+/)[0]);
+								const numB = parseInt(b.file_name.match(/\d+/)[0]);
+								return numA - numB;
+							})
+							.map(a => a.extracted_content);
+
+						const reconstructed = ClaudeConversation.fromChatlog(
+							chatlogAtt.extracted_content,
+							summaryTexts
+						);
+
+						if (reconstructed) {
+							const messages = await reconstructed.getMessages();
+							const messagesJson = messages.map(m => m.toHistoryJSON());
+							await storePhantomMessages(conversationId, messagesJson);
+							phantomMessages = messages;
+						}
+					}
+				}
+			}
 
 			if (phantomMessages && phantomMessages.length > 0) {
 				injectPhantomMessages(conversationData, phantomMessages);
