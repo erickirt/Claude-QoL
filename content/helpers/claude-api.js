@@ -99,6 +99,58 @@ async function clearPhantomMessages(conversationId) {
 	await _bridgeRequest('PHANTOM_CLEAR', { conversationId }, 'PHANTOM_CLEARED');
 }
 
+// Shared streaming freshness check.
+// Fetches apiUrl, reads first ~8KB to find updated_at, compares with cachedEntry.
+// Returns { data, fromCache } on success, null on failure.
+// fetchFn allows callers to pass in the real (unpatched) fetch.
+async function streamingFreshnessCheck(apiUrl, cachedEntry, fetchFn = fetch) {
+	const response = await fetchFn(apiUrl);
+	if (!response.ok) return null;
+
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	let accumulated = '';
+	const MAX_BYTES = 8192;
+
+	try {
+		while (accumulated.length < MAX_BYTES) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			accumulated += decoder.decode(value, { stream: true });
+
+			const chatMsgIdx = accumulated.indexOf('"chat_messages"');
+			const searchRegion = chatMsgIdx !== -1 ? accumulated.substring(0, chatMsgIdx) : accumulated;
+			const match = searchRegion.match(/"updated_at"\s*:\s*"([^"]+)"/);
+			if (match) {
+				if (cachedEntry.updated_at >= match[1]) {
+					reader.cancel();
+					return { data: cachedEntry.data, fromCache: true };
+				}
+				break;
+			}
+			if (chatMsgIdx !== -1) break;
+		}
+
+		// Cache stale or updated_at not found — read remaining stream
+		const chunks = [accumulated];
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			chunks.push(decoder.decode(value, { stream: true }));
+		}
+		chunks.push(decoder.decode()); // flush
+
+		const data = JSON.parse(chunks.join(''));
+		if (data.updated_at) {
+			_convCachePut(data.uuid || cachedEntry.uuid, data.updated_at, data);
+		}
+		return { data, fromCache: false };
+	} catch (e) {
+		reader.cancel();
+		return null;
+	}
+}
+
 class ClaudeConversation {
 	constructor(orgId, conversationId = null) {
 		this.orgId = orgId;
@@ -321,69 +373,11 @@ class ClaudeConversation {
 		return this.conversationData;
 	}
 
-	// Stream the API response, extract updated_at from first few KB.
-	// If cache is still fresh, abort the stream and return cached data.
-	// Returns data (cached or freshly parsed) on success, null on failure.
 	async _streamingFreshnessCheck(apiUrl, cachedEntry) {
-		const response = await fetch(apiUrl);
-		if (!response.ok) return null;
-		console.log('Streaming freshness check started for conversation', this.conversationId);
-		const reader = response.body.getReader();
-		const decoder = new TextDecoder();
-		let accumulated = '';
-		const MAX_BYTES = 8192;
-
-		try {
-			while (accumulated.length < MAX_BYTES) {
-				const { done, value } = await reader.read();
-				if (done) break;
-				accumulated += decoder.decode(value, { stream: true });
-				console.log('Accumulated chunk for freshness check:', accumulated);
-
-				// Only search for updated_at in the portion before chat_messages (top-level field)
-				const chatMsgIdx = accumulated.indexOf('"chat_messages"');
-				const searchRegion = chatMsgIdx !== -1 ? accumulated.substring(0, chatMsgIdx) : accumulated;
-				console.log('Search region for updated_at:', searchRegion);
-				const match = searchRegion.match(/"updated_at"\s*:\s*"([^"]+)"/);
-				console.log('updated_at match:', match);
-				if (match) {
-					const serverUpdatedAt = match[1];
-					console.log(`Cache updated_at: ${cachedEntry.updated_at}, Server updated_at: ${match[1]}`);
-					if (cachedEntry.updated_at >= serverUpdatedAt) {
-						// Cache is fresh — abort stream
-						reader.cancel();
-						this.lastGetDataFromCache = true;
-						return cachedEntry.data;
-					}
-					// Cache is stale — need to read the rest
-					break;
-				}
-
-				// If chat_messages appeared but no updated_at found before it, give up on cache check
-				if (chatMsgIdx !== -1) break;
-			}
-			console.log('Cache is stale or updated_at not found, reading full response from server');
-
-			// Read remaining stream and parse
-			const chunks = [accumulated];
-			while (true) {
-				const { done, value } = await reader.read();
-				if (done) break;
-				chunks.push(decoder.decode(value, { stream: true }));
-			}
-			chunks.push(decoder.decode()); // flush
-
-			const data = JSON.parse(chunks.join(''));
-			this.lastGetDataFromCache = false;
-
-			if (data.updated_at) {
-				_convCachePut(this.conversationId, data.updated_at, data);
-			}
-			return data;
-		} catch (e) {
-			reader.cancel();
-			return null;
-		}
+		const result = await streamingFreshnessCheck(apiUrl, cachedEntry);
+		if (!result) return null;
+		this.lastGetDataFromCache = result.fromCache;
+		return result.data;
 	}
 
 	// Get messages - when tree=false, reconstructs the current trunk from full tree data
