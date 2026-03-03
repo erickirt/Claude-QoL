@@ -83,7 +83,9 @@
 		const combined = new Uint8Array(iv.length + ciphertext.byteLength);
 		combined.set(iv);
 		combined.set(new Uint8Array(ciphertext), iv.length);
-		return { v: 1, keyHash: _keyHash, data: btoa(String.fromCharCode(...combined)) };
+		let binary = '';
+		for (let i = 0; i < combined.length; i++) binary += String.fromCharCode(combined[i]);
+		return { v: 1, keyHash: _keyHash, data: btoa(binary) };
 	}
 
 	// Decrypt: detects per-item format
@@ -111,11 +113,19 @@
 
 	async function _initEncryptionKey() {
 		let stylesData;
-		try {
-			stylesData = await listStyles(getOrgId());
-		} catch (e) {
-			console.warn('[Encryption] Failed to fetch styles, operating in plaintext mode:', e.message);
-			return null;
+		for (let attempt = 0; attempt < 10; attempt++) {
+			try {
+				stylesData = await listStyles(getOrgId());
+				break;
+			} catch (e) {
+				if (attempt < 9) {
+					console.warn(`[Encryption] Failed to fetch styles (attempt ${attempt + 1}/10), retrying...`);
+					await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
+					continue;
+				}
+				console.warn('[Encryption] Failed to fetch styles after 10 attempts, operating in plaintext mode:', e.message);
+				return null;
+			}
 		}
 
 		// Search styles for our key
@@ -135,17 +145,24 @@
 		}
 
 		// No key in styles — try to create one
-		try {
-			const rawKey = crypto.getRandomValues(new Uint8Array(16)); // 128-bit
-			const base64Key = btoa(String.fromCharCode(...rawKey)).replace(/=+$/, '');
-			await createStyle(getOrgId(), 'Encryption key for Claude Toolbox cache', ENCRYPTION_KEY_PREFIX + base64Key);
-			_keyHash = await _computeKeyHash(rawKey);
-			return await crypto.subtle.importKey(
-				'raw', rawKey, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']
-			);
-		} catch (e) {
-			console.warn('[Encryption] Failed to create key style, operating in plaintext mode:', e.message);
-			return null;
+		const rawKey = crypto.getRandomValues(new Uint8Array(16)); // 128-bit
+		const base64Key = btoa(String.fromCharCode(...rawKey)).replace(/=+$/, '');
+		for (let attempt = 0; attempt < 10; attempt++) {
+			try {
+				await createStyle(getOrgId(), 'Encryption key for Claude Toolbox cache', ENCRYPTION_KEY_PREFIX + base64Key);
+				_keyHash = await _computeKeyHash(rawKey);
+				return await crypto.subtle.importKey(
+					'raw', rawKey, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']
+				);
+			} catch (e) {
+				if (attempt < 9) {
+					console.warn(`[Encryption] Failed to create key style (attempt ${attempt + 1}/10), retrying...`);
+					await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
+					continue;
+				}
+				console.warn('[Encryption] Failed to create key style after 10 attempts, operating in plaintext mode:', e.message);
+				return null;
+			}
 		}
 	}
 
