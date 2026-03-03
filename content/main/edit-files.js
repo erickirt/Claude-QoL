@@ -879,32 +879,6 @@
 			url = input.url;
 		}
 
-		// Intercept list_styles to filter out temp style
-		if (url && url.includes('/list_styles')) {
-			const response = await originalFetch(...args);
-
-			if (!response.ok) {
-				return response;
-			}
-
-			const data = await response.json();
-
-			// Filter out temp style and encryption key style from customStyles
-			if (data.customStyles) {
-				data.customStyles = data.customStyles.filter(
-					style => style.name !== TEMP_STYLE_NAME &&
-						!(style.name && style.name.startsWith('QOL_ENCRYPT_NODELETE_'))
-				);
-			}
-
-			// Return modified response
-			return new Response(JSON.stringify(data), {
-				status: response.status,
-				statusText: response.statusText,
-				headers: response.headers
-			});
-		}
-
 		// Intercept /completion requests when edit flag is set
 		if (url && url.includes('/completion') && pendingEditIntercept && config?.method === 'POST') {
 			console.log('Intercepting edit completion request');

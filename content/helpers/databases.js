@@ -151,7 +151,7 @@
 		const base64Key = btoa(String.fromCharCode(...rawKey)).replace(/=+$/, '');
 		for (let attempt = 0; attempt < 10; attempt++) {
 			try {
-				await createStyle(getOrgId(), 'Encryption key for Claude Toolbox cache', ENCRYPTION_KEY_PREFIX + base64Key);
+				await createStyle(getOrgId(), 'Encryption key for Claude QoL cache', ENCRYPTION_KEY_PREFIX + base64Key);
 				_keyHash = await _computeKeyHash(rawKey);
 				const key = await crypto.subtle.importKey(
 					'raw', rawKey, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']

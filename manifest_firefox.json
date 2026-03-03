@@ -1,7 +1,7 @@
 {
 	"manifest_version": 3,
 	"name": "Claude QoL - Export, Fork, Search, and more",
-	"version": "2.4.6",
+	"version": "2.4.7",
 	"description": "Collection of enhancements for Claude",
 	"permissions": [
 		"storage"
@@ -53,7 +53,7 @@
 				"content/main/edit-files.js",
 				"content/main/file-download.js",
 				"content/main/pref-switcher-fetch-watcher.js",
-				"content/main/perchat-styles-fetch-interceptor.js",
+				"content/main/styles-fetch-interceptor.js",
 				"content/main/tts-interceptor.js"
 			],
 			"world": "MAIN",

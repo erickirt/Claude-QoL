@@ -1,2 +1,4 @@
-Add project chats export
-Add ALL chats export
+Allow phantom messages to show up on other devices (will apply to new convos only)
+Encrypt IndexDB data at rest (phantom messages, etc)
+Cache conversation data for faster exporting/search
+TODO: Allow importing a ChatGPT data export

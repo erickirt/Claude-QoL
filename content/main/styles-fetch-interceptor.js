@@ -1,7 +1,10 @@
-// perchat-styles-fetch-interceptor.js
+// styles-fetch-interceptor.js
 (function() {
     'use strict';
-    
+
+    const HIDDEN_STYLE_NAMES = ['advanced_edit_temporary_style'];
+    const HIDDEN_STYLE_PREFIXES = ['QOL_ENCRYPT_NODELETE_'];
+
     const originalFetch = window.fetch;
     window.fetch = async (...args) => {
         const [input, config] = args;
@@ -14,6 +17,30 @@
             url = input;
         } else if (input instanceof Request) {
             url = input.url;
+        }
+
+        // Intercept list_styles to filter out internal styles
+        if (url && url.includes('/list_styles')) {
+            const response = await originalFetch(...args);
+
+            if (!response.ok) {
+                return response;
+            }
+
+            const data = await response.json();
+
+            if (data.customStyles) {
+                data.customStyles = data.customStyles.filter(
+                    style => !HIDDEN_STYLE_NAMES.includes(style.name) &&
+                        !HIDDEN_STYLE_PREFIXES.some(prefix => style.name && style.name.startsWith(prefix))
+                );
+            }
+
+            return new Response(JSON.stringify(data), {
+                status: response.status,
+                statusText: response.statusText,
+                headers: response.headers
+            });
         }
 
         // Handle style deletion notifications
