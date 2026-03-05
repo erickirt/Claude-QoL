@@ -1,4 +1,1 @@
-Allow phantom messages to show up on other devices (will apply to new convos only)
-Encrypt IndexDB data at rest (phantom messages, etc)
-Cache conversation data for faster exporting/search
-TODO: Allow importing a ChatGPT data export
+HOTFIX: Stop accidentally sending /project API calls twice (this was causing files to be uploaded twice!)

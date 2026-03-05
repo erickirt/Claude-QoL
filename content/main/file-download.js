@@ -253,11 +253,12 @@
 			)) {
 				//console.log(`${LOG_PREFIX} Fetch intercepted: ${url}`);
 				// Trigger processing after the fetch completes
-				originalFetch.apply(this, args).then(response => {
+				const result = originalFetch.apply(this, args);
+				result.then(() => {
 					//console.log(`${LOG_PREFIX} Fetch completed, triggering processProject()`);
 					processProject();
-					return response.clone();
 				});
+				return result;
 			}
 		}
 
