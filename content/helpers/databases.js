@@ -379,7 +379,7 @@
 					await phantomDB.phantomMessages.put({ conversationId: row.conversationId, encryptedData: encrypted });
 				}
 			}
-			console.log('[Encryption] Bulk migration complete.');
+			//console.log('[Encryption] Bulk migration complete.');
 		} catch (e) {
 			console.warn('[Encryption] Bulk migration error:', e.message);
 		}

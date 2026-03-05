@@ -21,6 +21,8 @@
 				"lib/dexie.min.js",
 				"lib/jszip.min.js",
 				"lib/mime.min.js",
+				"lib/marked.min.js",
+				"lib/highlight.min.js",
 				"content/helpers/claude-styles.js",
 				"content/helpers/claude-api.js",
 				"content/helpers/databases.js",
@@ -67,7 +69,9 @@
 		{
 			"resources": [
 				"kofi-button.png",
-				"update_patchnotes.txt"
+				"update_patchnotes.txt",
+				"html_template/export-template.css",
+				"html_template/export-template.js"
 			],
 			"matches": [
 				"https://claude.ai/*"

@@ -214,6 +214,218 @@
 		return JSON.stringify(filtered, null, 2);
 	}
 
+
+	//#region HTML export
+	// HTML export stuff
+	const EXPORT_SCAFFOLD = `
+	<!DOCTYPE html>
+	<html lang="en">
+	<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>{{TITLE}}</title>
+	<style>{{STYLESHEET}}</style>
+	</head>
+	<body data-default-leaf="{{DEFAULT_LEAF}}">
+	{{MESSAGES}}
+	<button id="theme-toggle"></button>
+	<script id="conversation-tree" type="application/json">{{TREE_JSON}}</script>
+	<script id="conversation-raw" type="text/plain">{{RAW_TXT}}</script>
+	<script>{{SCRIPT}}</script>
+	</body>
+	</html>`.replace(/^\t{1}/gm, '').trim();
+
+	let _templateCache = null;
+
+	async function extractFontDataUris() {
+		const FONT_KEYS = {
+			'anthropicsans/normal': '{{FONT_SANS_NORMAL}}',
+			'anthropicsans/italic': '{{FONT_SANS_ITALIC}}',
+			'anthropicserif/normal': '{{FONT_SERIF_NORMAL}}',
+			'anthropicserif/italic': '{{FONT_SERIF_ITALIC}}',
+			'jetbrains/normal': '{{FONT_MONO}}'
+		};
+
+		const result = new Map();
+		const fontFaceRegex = /@font-face\s*\{[^}]*\}/g;
+		const familyRegex = /font-family:\s*["']?([^;"'\n]+)/;
+		const styleRegex = /font-style:\s*(\w+)/;
+		const urlRegex = /url\(["']?([^"')]+\.woff2)["']?\)/;
+
+		// Gather all stylesheet URLs
+		const sheetUrls = Array.from(document.querySelectorAll('link[rel="stylesheet"]'))
+			.map(link => link.href)
+			.filter(Boolean);
+
+		for (const sheetUrl of sheetUrls) {
+			try {
+				const cssText = await fetch(sheetUrl).then(r => r.text());
+				const blocks = cssText.match(fontFaceRegex) || [];
+
+				for (const block of blocks) {
+					const familyMatch = block.match(familyRegex);
+					const styleMatch = block.match(styleRegex);
+					const urlMatch = block.match(urlRegex);
+					if (!familyMatch || !urlMatch) continue;
+
+					const family = familyMatch[1].trim().toLowerCase();
+					const style = (styleMatch && styleMatch[1]) || 'normal';
+					const key = family + '/' + style;
+					const placeholder = FONT_KEYS[key];
+					if (!placeholder || result.has(placeholder)) continue;
+
+					const response = await fetch(urlMatch[1]);
+					const blob = await response.blob();
+					const dataUri = await new Promise(resolve => {
+						const reader = new FileReader();
+						reader.onloadend = () => resolve(reader.result);
+						reader.readAsDataURL(blob);
+					});
+					result.set(placeholder, dataUri);
+				}
+			} catch (e) {
+				console.warn('Failed to process stylesheet:', sheetUrl, e);
+			}
+		}
+
+		return result;
+	}
+
+	async function getExportTemplate() {
+		if (_templateCache) return _templateCache;
+
+		const base = chrome.runtime.getURL('html_template/');
+		const [css, js] = await Promise.all([
+			fetch(base + 'export-template.css').then(r => r.text()),
+			fetch(base + 'export-template.js').then(r => r.text()),
+		]);
+
+		// Embed fonts as data URIs
+		const fontMap = await extractFontDataUris();
+		let processedCss = css;
+		for (const [originalUrl, dataUri] of fontMap) {
+			processedCss = processedCss.replaceAll(originalUrl, dataUri);
+		}
+
+		_templateCache = EXPORT_SCAFFOLD
+			.replace('{{STYLESHEET}}', processedCss)
+			.replace('{{SCRIPT}}', js);
+
+		return _templateCache;
+	}
+
+	const _escEl = document.createElement('span');
+	function esc(str) {
+		_escEl.textContent = str;
+		return _escEl.innerHTML;
+	}
+
+	function safeEmbed(str) {
+		return str.replace(/<\//g, '<\\/');
+	}
+
+	async function formatHtmlExport(conversationData, messages, conversationId) {
+		// Configure marked to use highlight.js for code blocks
+		marked.use({
+			renderer: {
+				code({ text, lang }) {
+					let highlighted;
+					if (lang && hljs.getLanguage(lang)) {
+						highlighted = hljs.highlight(text, { language: lang }).value;
+					} else {
+						highlighted = hljs.highlightAuto(text).value;
+					}
+					return `<pre><code class="hljs">${highlighted}</code></pre>`;
+				}
+			}
+		});
+
+		// Extract current branch for the raw txt embed (re-import)
+		const messageMap = new Map(messages.map(m => [m.uuid, m]));
+		const ROOT = '00000000-0000-4000-8000-000000000000';
+		const defaultLeaf = conversationData.current_leaf_message_uuid;
+		const linearBranch = [];
+		let walkId = defaultLeaf;
+		while (walkId && walkId !== ROOT && messageMap.has(walkId)) {
+			linearBranch.push(messageMap.get(walkId));
+			walkId = messageMap.get(walkId).parent_message_uuid;
+		}
+		linearBranch.reverse();
+
+		const rawTxt = formatTxtExport(conversationData, linearBranch, conversationId);
+		const title = conversationData.name || 'Untitled Conversation';
+
+		// Build tree JSON for navigation
+		const treeJson = messages.map(m => ({
+			id: m.uuid,
+			parent: m.parent_message_uuid,
+			sender: m.sender
+		}));
+
+		// Render ALL messages as hidden divs
+		let messagesHtml = '';
+		for (const message of messages) {
+			const isUser = message.sender === ROLES.USER.apiName;
+			const role = isUser ? 'User' : 'Assistant';
+			const roleClass = isUser ? 'msg-user' : 'msg-assistant';
+
+			let contentHtml = '';
+			for (const content of message.content) {
+				if (content.type === 'thinking') {
+					let summaryText = 'Thinking';
+					if (content.summaries && content.summaries.length > 0) {
+						summaryText = content.summaries[content.summaries.length - 1].summary;
+					}
+					contentHtml += `<details class="thinking-block"><summary>${esc(summaryText)}</summary><pre class="thinking-content">${esc(content.thinking || '')}</pre></details>`;
+				} else if (content.type === 'text') {
+					contentHtml += `<div class="text-content">${marked.parse(content.text || '')}</div>`;
+				}
+			}
+
+			// Download all files for this message in parallel
+			const fileResults = await Promise.all(message.files.map(async (file) => {
+				if (file instanceof ClaudeAttachment) {
+					const b64 = btoa(unescape(encodeURIComponent(file.extracted_content || '')));
+					const mimeType = mime.getType(file.file_name) || 'text/plain';
+					return `<a class="file-pill" href="data:${mimeType};base64,${b64}" download="${esc(file.file_name)}">File: ${esc(file.file_name)}</a>`;
+				}
+
+				try {
+					const blob = await file.download();
+					if (!blob) return `<span class="file-pill">File: ${esc(file.file_name)}</span>`;
+
+					const dataUri = await new Promise(resolve => {
+						const reader = new FileReader();
+						reader.onloadend = () => resolve(reader.result);
+						reader.readAsDataURL(blob);
+					});
+
+					if (file.file_kind === 'image') {
+						return `<img src="${dataUri}" alt="${esc(file.file_name)}">`;
+					}
+					return `<a class="file-pill" href="${dataUri}" download="${esc(file.file_name)}">File: ${esc(file.file_name)}</a>`;
+				} catch (e) {
+					return `<span class="file-pill">File: ${esc(file.file_name)}</span>`;
+				}
+			}));
+
+			contentHtml += fileResults.join('');
+			messagesHtml += `<div class="msg ${roleClass}" id="msg-${message.uuid}" style="display:none"><div class="msg-header">${role}</div><div class="msg-body">${contentHtml}</div></div>\n`;
+		}
+
+		// Assemble from template
+		const template = await getExportTemplate();
+		const templateResult = template
+			.replace('{{TITLE}}', esc(title))
+			.replace('{{DEFAULT_LEAF}}', defaultLeaf)
+			.replace('{{MESSAGES}}', messagesHtml)
+			.replace('{{TREE_JSON}}', safeEmbed(JSON.stringify(treeJson)))
+			.replace('{{RAW_TXT}}', safeEmbed(rawTxt));
+		// console.log(templateResult);
+		return templateResult;
+	}
+	// #endregion
+
 	function buildZipFilename(uuid, filename) {
 		const lastDot = filename.lastIndexOf('.');
 		if (lastDot === -1) {
@@ -238,9 +450,9 @@
 	async function formatZipExport(conversationData, messages, conversationId, loadingModal) {
 		const zip = new JSZip();
 
-		// Generate the txt content
-		const txtContent = formatTxtExport(conversationData, messages, conversationId);
-		await addToZip(zip, 'conversation.txt', txtContent);
+		// Generate the html content (contains raw txt for re-import)
+		const htmlContent = await formatHtmlExport(conversationData, messages, conversationId);
+		await addToZip(zip, 'conversation.html', htmlContent);
 
 		// Collect all downloadable files (ClaudeFile and ClaudeCodeExecutionFile)
 		const allFiles = messages.flatMap(msg =>
@@ -315,6 +527,8 @@
 				return formatLibrechatExport(conversationData, messages, conversationId);
 			case 'raw':
 				return formatRawExport(conversationData, messages, conversationId);
+			case 'html':
+				return formatHtmlExport(conversationData, messages, conversationId);
 			case 'zip':
 				return formatZipExport(conversationData, messages, conversationId, loadingModal);
 			default:
@@ -524,13 +738,21 @@
 			zip = await JSZip.loadAsync(base64, { base64: true });
 		}
 
-		// Find and read the txt file
+		// Find and read conversation data (html or legacy txt)
+		const htmlFile = zip.file('conversation.html');
 		const txtFile = zip.file('conversation.txt');
-		if (!txtFile) {
-			throw new Error('Invalid zip: missing conversation.txt');
+		let txtContent;
+		if (htmlFile) {
+			const html = await htmlFile.async('string');
+			const match = html.match(/<script id="conversation-raw"[^>]*>([\s\S]*?)<\/script>/);
+			if (!match) throw new Error('Invalid zip: conversation.html missing raw data');
+			txtContent = match[1].replace(/<\\\//g, '</');
+		} else if (txtFile) {
+			txtContent = await txtFile.async('string');
+		} else {
+			throw new Error('Invalid zip: missing conversation.html or conversation.txt');
 		}
 
-		const txtContent = await txtFile.async('string');
 		const parsedData = parseAndValidateText(txtContent);
 
 		// Extract files from zip if requested
@@ -968,7 +1190,7 @@
 		// Trigger file picker
 		const fileInput = document.createElement('input');
 		fileInput.type = 'file';
-		fileInput.accept = '.txt,.json,.zip';
+		fileInput.accept = '.txt,.json,.zip,.html';
 
 		const file = await new Promise(resolve => {
 			fileInput.onchange = e => resolve(e.target.files[0]);
@@ -1067,7 +1289,7 @@
 		// Trigger file picker
 		const fileInput = document.createElement('input');
 		fileInput.type = 'file';
-		fileInput.accept = '.txt,.json,.zip';
+		fileInput.accept = '.txt,.json,.zip,.html';
 
 		const file = await new Promise(resolve => {
 			fileInput.onchange = e => resolve(e.target.files[0]);
@@ -1127,7 +1349,7 @@
 		const conversation = new ClaudeConversation(orgId, conversationId);
 		const conversationData = await conversation.getData();
 		const wasCached = conversation.lastGetDataFromCache;
-		const messages = await conversation.getMessages(exportTree);
+		const messages = await conversation.getMessages(format === 'html' || format === 'zip' || exportTree);
 		const safeName = (conversationData.name || 'untitled').replace(/[<>:"/\\|?*]/g, '_');
 		const filename = `Claude_export_${safeName}_${conversationId}.${extension}`;
 		const exportContent = await formatExport(conversationData, messages, format, conversationId, loadingModal, exportOptions);
@@ -1317,7 +1539,7 @@
 		const isOnProjectPage = Boolean(projectId);
 
 		// Get last used format from localStorage (default to zip for full fidelity)
-		const lastFormat = localStorage.getItem('lastExportFormat') || 'zip_zip';
+		const lastFormat = localStorage.getItem('lastExportFormat') || 'html_html';
 
 		// Build the modal content
 		const content = document.createElement('div');
@@ -1336,8 +1558,9 @@
 			const exportContainer = document.createElement('div');
 			exportContainer.className = 'mb-4 flex gap-2';
 
-			// Format select (TXT is internal only, used inside ZIP)
+			// Format select (TXT is internal only, used inside HTML for raw data - not offered as standalone option)
 			formatSelect = createClaudeSelect([
+				{ value: 'html_html', label: 'HTML (.html)' },
 				{ value: 'zip_zip', label: 'Zip (.zip)' },
 				{ value: 'md_md', label: 'Markdown (.md)' },
 				{ value: 'jsonl_jsonl', label: 'JSONL (.jsonl)' },
