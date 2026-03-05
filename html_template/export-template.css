@@ -549,12 +549,4 @@ pre:hover .copy-btn {
 		max-width: none;
 		padding: 0
 	}
-
-	.msg {
-		break-inside: avoid
-	}
-
-	.text-content pre {
-		break-inside: avoid
-	}
 }
