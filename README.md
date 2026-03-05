@@ -55,9 +55,9 @@ Lets you hop between your messages quickly, without scrolling.
 ## Exporting and importing
 <img width="549" height="642" alt="image" src="https://github.com/user-attachments/assets/fe770c3a-d306-4a84-bc1d-b04fe3bc1469" />
 
-You can export a chat to various formats. Txt, JSON, etc.
+You can export a chat (or project) to various formats. Zip, HTML, JSON, etc.
 
-You can also IMPORT a chat from a Txt format export, and it will appear as though all the messages are actually there.
+You can also IMPORT a chat from a ZIP format export, and it will appear as though all the messages are actually there.
 
 ## Preferences switcher
 <img width="269" height="80" alt="image" src="https://github.com/user-attachments/assets/ce6583f6-3d28-43cc-bd89-3ab0b98d93e0" />

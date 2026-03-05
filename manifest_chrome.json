@@ -1,8 +1,8 @@
 {
 	"manifest_version": 3,
 	"name": "Claude QoL - Export, Fork, Search, and more",
-	"version": "2.4.7",
-	"description": "Collection of enhancements for Claude",
+	"version": "2.5.0",
+	"description": "Collection of enhancements for Claude - Exporting and Importing chats, Forking, Text Search, Bookmarks, TTS, STT, and more quality of life features.",
 	"permissions": [
 		"storage"
 	],
