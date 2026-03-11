@@ -41,7 +41,6 @@ const CLAUDE_CLASSES = {
 	LIST_ITEM: 'p-3 rounded bg-bg-200 border border-border-300 hover:bg-bg-300 cursor-pointer transition-colors',
 };
 
-const mobileModalButtons = [];
 const spinnerStyles = document.createElement('style');
 spinnerStyles.textContent = `
 	@keyframes claude-modal-spin {
@@ -519,7 +518,7 @@ function createClaudeToggle(labelText = '', checked = false, onChange = null) {
 
 
 	const track = document.createElement('div');
-	track.className = 'border-border-300 rounded-full bg-bg-500 transition-colors peer-checked:bg-accent-secondary-100 peer-disabled:opacity-50';
+	track.className = 'border-border-300 rounded-full bg-bg-500 transition-colors peer-disabled:opacity-50';
 	track.style.width = '36px';
 	track.style.height = '20px';
 
@@ -531,8 +530,14 @@ function createClaudeToggle(labelText = '', checked = false, onChange = null) {
 	thumb.style.top = '2px';
 	thumb.style.transform = checked ? 'translateX(16px)' : 'translateX(0)';
 
+	const updateTrackColor = (on) => {
+		track.style.backgroundColor = on ? '#2c84db' : '';
+	};
+	updateTrackColor(checked);
+
 	input.addEventListener('change', (e) => {
 		thumb.style.transform = e.target.checked ? 'translateX(16px)' : 'translateX(0)';
+		updateTrackColor(e.target.checked);
 		if (onChange) onChange(e.target.checked);
 	});
 
@@ -853,166 +858,281 @@ function createClaudeTooltip(element, tooltipText, deleteOnClick) {
 }
 
 
-// All top right buttons must be in ISOLATED only!
-function tryAddTopRightButton(buttonClass, createButtonFn, tooltipText = '', forceDisplayOnMobile = false, displayOnNewPage = false, displayOnProjectPage = false) {
-	const isChatPage = window.location.href.includes("/chat/");
-	const isProjectPage = Boolean(window.location.pathname.match(/\/project\/[a-f0-9-]+/));
-	if (!isChatPage && !(displayOnNewPage && !isProjectPage) && !(isProjectPage && displayOnProjectPage)) {
-		return false;
-	}
+// ======== PAGE LAYOUTS ========
+// Modular layout registry for button injection targets.
+// Each layout has match() to detect the page, getAnchor() to find the DOM insertion point.
+// Checked in order; first match() wins.
+const pageLayouts = {
+	chatActions: {
+		group: 'chat',
+		match() {
+			return window.location.href.includes('/chat/')
+				&& !!document.querySelector('[data-testid="chat-actions"]');
+		},
+		getAnchor() {
+			const chatActions = document.querySelector('[data-testid="chat-actions"]');
+			if (!chatActions) return null;
+			return { parent: chatActions.parentElement, referenceNode: chatActions, mode: 'inline' };
+		},
+	},
+	chatWiggle: {
+		group: 'chat',
+		match() {
+			return window.location.href.includes('/chat/')
+				&& !document.querySelector('[data-testid="chat-actions"]')
+				&& !!document.querySelector('[data-testid="wiggle-controls-actions"]');
+		},
+		getAnchor() {
+			const wiggle = document.querySelector('[data-testid="wiggle-controls-actions"]');
+			if (!wiggle) return null;
+			return { parent: wiggle.parentElement, referenceNode: null, mode: 'wiggle' };
+		},
+	},
+	homeWeb: {
+		group: 'home',
+		match() {
+			const isHome = window.location.pathname === '/new' || window.location.pathname === '/';
+			if (!isHome) return false;
+			const mainContent = document.getElementById('main-content');
+			return !!mainContent?.querySelector('[class*="look-around"]');
+		},
+		getAnchor() {
+			const mainContent = document.getElementById('main-content');
+			const ghost = mainContent?.querySelector('[class*="look-around"]');
+			if (!ghost) return null;
+			const zHeader = ghost.closest('.z-header');
+			if (!zHeader) return null;
+			let ref = ghost;
+			while (ref.parentElement !== zHeader) ref = ref.parentElement;
+			return { parent: zHeader, referenceNode: ref, mode: 'inline' };
+		},
+	},
+	homeDesktop: {
+		group: 'home',
+		match() {
+			const isHome = window.location.pathname === '/new' || window.location.pathname === '/';
+			if (!isHome) return false;
+			const mainContent = document.getElementById('main-content');
+			if (!mainContent) return false;
+			return !mainContent.querySelector('[class*="look-around"]');
+		},
+		getAnchor() {
+			const mainContent = document.getElementById('main-content');
+			if (!mainContent) return null;
+			return { parent: mainContent, referenceNode: null, mode: 'self-container' };
+		},
+	},
+	project: {
+		group: 'project',
+		match() {
+			return !!window.location.pathname.match(/\/project\/[a-f0-9-]+/);
+		},
+		getAnchor() {
+			const nativeActions = document.querySelector('.flex.items-center.gap-1.ml-auto');
+			if (!nativeActions) return null;
+			const starWrapper = nativeActions.querySelector('[data-state]');
+			return { parent: nativeActions, referenceNode: starWrapper || null, mode: 'inline' };
+		},
+	},
+};
 
-	const BUTTON_PRIORITY = [
+// ======== BUTTON BAR SINGLETON ========
+// All top right buttons must be in ISOLATED only!
+// Callers register buttons once; ButtonBar handles polling, injection, ordering, and mobile.
+const ButtonBar = {
+	BUTTON_PRIORITY: [
 		'search-button',
 		'navigation-button',
 		'style-selector-button',
 		'export-button',
 		'stt-settings-button',
 		'tts-settings-button',
-	];
+	],
 
-	// Find the native button area as a reference point, then create/find our own sibling container.
-	// This avoids interfering with native button ordering (important for desktop client compatibility).
-	let parent, referenceNode;
-	let isWiggleLayout = false;
-	const isHomePage = window.location.pathname === '/new' || window.location.pathname === '/';
+	_registrations: new Map(),
+	_mobileModalButtons: [],
+	_pollInterval: null,
+	_container: null,
 
-	if (isChatPage) {
-		const chatActions = document.querySelector("[data-testid=\"chat-actions\"]");
-		const wiggleControls = document.querySelector("[data-testid=\"wiggle-controls-actions\"]");
-		if (!chatActions && !wiggleControls) return false;
-
-		if (chatActions) {
-			parent = chatActions.parentElement;
-			referenceNode = chatActions;
-		} else {
-			// Wiggle-controls layout: parent is flex-col with wiggle-controls absolutely positioned.
-			// A normal sibling won't align, so we also use absolute positioning within the same parent
-			// and dynamically offset to sit left of wiggle-controls.
-			isWiggleLayout = true;
-			parent = wiggleControls.parentElement;
-			referenceNode = null;
+	register({ buttonClass, createFn, tooltip = '', forceDisplayOnMobile = false, pages, onInjected = null }) {
+		if (this._registrations.has(buttonClass)) return;
+		this._registrations.set(buttonClass, { buttonClass, createFn, tooltip, forceDisplayOnMobile, pages, onInjected });
+		if (!this._pollInterval) {
+			this._pollInterval = setInterval(() => this._tick(), 1000);
+			this._tick();
 		}
-	} else if (isHomePage) {
-		// Check if the ghost button is inside the main content area (web UI) vs title bar (desktop client)
-		const mainContent = document.getElementById('main-content');
-		const ghostInMain = mainContent?.querySelector('[class*="look-around"]');
-		if (ghostInMain) {
-			// Web UI: ghost button is in main content, insert next to its z-header container
-			parent = ghostInMain.closest('.z-header');
-			if (!parent) return false;
-			referenceNode = ghostInMain;
-			while (referenceNode.parentElement !== parent) {
-				referenceNode = referenceNode.parentElement;
+	},
+
+	_detectLayout() {
+		for (const [name, layout] of Object.entries(pageLayouts)) {
+			if (layout.match()) return { name, ...layout };
+		}
+		return null;
+	},
+
+	_tick() {
+		const layout = this._detectLayout();
+		if (!layout) {
+			document.querySelectorAll('.toolbox-buttons').forEach(el => el.remove());
+			this._container = null;
+			return;
+		}
+
+		const anchor = layout.getAnchor();
+		if (!anchor) return;
+
+		this._cleanStaleContainers(anchor);
+		this._ensureContainer(anchor);
+		if (!this._container) return;
+
+		this._syncButtons(layout.group);
+
+		if (anchor.mode === 'wiggle') {
+			this._updateWigglePosition(anchor);
+		}
+	},
+
+	_cleanStaleContainers(anchor) {
+		document.querySelectorAll('.toolbox-buttons').forEach(el => {
+			if (el !== this._container && el !== anchor.parent && el.parentElement !== anchor.parent) {
+				el.remove();
 			}
-		} else {
-			// Desktop client: ghost button is in the title bar, not in main content.
-			// Use absolute positioning (not fixed) since main-content has position:relative
-			// and sits below the Electron title bar. Fixed would overlap the title bar.
-			if (!mainContent) return false;
-			let container = mainContent.querySelector('.toolbox-buttons-home');
+		});
+	},
+
+	_ensureContainer(anchor) {
+		// Check if existing container is still in the DOM
+		if (this._container && this._container.isConnected) {
+			// Verify it's still in the right parent
+			if (anchor.mode === 'self-container') {
+				if (this._container.parentElement === anchor.parent) return;
+			} else {
+				if (this._container.parentElement === anchor.parent) return;
+			}
+			// Wrong parent — discard
+			this._container.remove();
+			this._container = null;
+		}
+
+		if (anchor.mode === 'self-container') {
+			// Desktop homepage: container is a direct child of parent with special classes
+			let container = anchor.parent.querySelector('.toolbox-buttons-home');
 			if (!container) {
 				container = document.createElement('div');
 				container.className = 'toolbox-buttons-home toolbox-buttons absolute right-3 flex items-center gap-3.5';
 				container.style.top = '0.625rem';
-				mainContent.appendChild(container);
+				anchor.parent.appendChild(container);
 			}
-			parent = container;
-			referenceNode = null;
-		}
-	} else if (isProjectPage) {
-		// Project page: insert inside the native action button row (star/hamburger), before the star button
-		const nativeActions = document.querySelector('.flex.items-center.gap-1.ml-auto');
-		if (!nativeActions) return false;
-		const starWrapper = nativeActions.querySelector('[data-state]');
-		parent = nativeActions;
-		referenceNode = starWrapper || null;
-	} else {
-		document.querySelectorAll('.toolbox-buttons').forEach(el => el.remove());
-		return false;
-	}
-
-	if (!parent) return false;
-
-	// Clean up toolbox containers from other contexts
-	// (e.g., homepage container persisting when navigating to a chat page on desktop client)
-	document.querySelectorAll('.toolbox-buttons').forEach(el => {
-		if (el !== parent && el.parentElement !== parent) el.remove();
-	});
-
-	// Find or create our toolbox container
-	let container;
-	if (parent.classList.contains('toolbox-buttons')) {
-		// Desktop homepage: parent IS the toolbox container
-		container = parent;
-	} else {
-		// Web UI / chat page: toolbox container is a child of parent
-		container = parent.querySelector(':scope > .toolbox-buttons');
-		if (!container) {
-			container = document.createElement('div');
-			if (isWiggleLayout) {
-				container.className = 'toolbox-buttons absolute top-0 z-20 flex items-center gap-1';
-				container.style.height = '3rem'; // match wiggle-controls !h-12
-			} else {
-				container.className = 'toolbox-buttons flex items-center gap-1';
+			this._container = container;
+		} else {
+			let container = anchor.parent.querySelector(':scope > .toolbox-buttons');
+			if (!container) {
+				container = document.createElement('div');
+				if (anchor.mode === 'wiggle') {
+					container.className = 'toolbox-buttons absolute top-0 z-20 flex items-center gap-1';
+					container.style.height = '3rem';
+				} else {
+					container.className = 'toolbox-buttons flex items-center gap-1';
+				}
+				if (anchor.referenceNode) {
+					anchor.parent.insertBefore(container, anchor.referenceNode);
+				} else {
+					anchor.parent.appendChild(container);
+				}
 			}
-			if (referenceNode) {
-				parent.insertBefore(container, referenceNode);
-			} else {
-				parent.appendChild(container);
-			}
+			this._container = container;
 		}
-	}
+	},
 
-	// Keep wiggle-layout container positioned to the left of wiggle-controls
-	if (isWiggleLayout) {
-		const wiggleControls = parent.querySelector("[data-testid=\"wiggle-controls-actions\"]");
-		if (wiggleControls) {
-			container.style.right = (wiggleControls.offsetWidth + 4) + 'px';
-		}
-	}
+	_syncButtons(group) {
+		const container = this._container;
+		const isMobile = window.innerHeight > window.innerWidth;
+		const isChatGroup = group === 'chat';
 
-	const isMobile = window.innerHeight > window.innerWidth;
-	let madeChanges = false;
+		for (const [buttonClass, reg] of this._registrations) {
+			// Check if this button should appear on this page type
+			if (!reg.pages.includes(group)) continue;
 
-	// On desktop OR if forceDisplay is true, add button to container
-	if (!isMobile || forceDisplayOnMobile || (!isChatPage && displayOnNewPage)) {
-		// Remove from mobile modal if it's there
-		const modalIndex = mobileModalButtons.findIndex(b => b.class === buttonClass);
-		if (modalIndex !== -1) {
-			mobileModalButtons.splice(modalIndex, 1);
-			madeChanges = true;
-		}
+			// Mobile handling: on chat pages, non-forced buttons go to "More actions" modal
+			if (isMobile && isChatGroup && !reg.forceDisplayOnMobile) {
+				// Remove from container if it exists
+				const existing = container.querySelector('.' + buttonClass);
+				if (existing) existing.remove();
 
-		// Add button if it doesn't exist
-		if (!container.querySelector('.' + buttonClass)) {
-			const button = createButtonFn();
-			button.classList.add(buttonClass);
-
-			// Add negative margin if mobile (portrait mode)
-			if (isMobile) {
-				button.classList.add('-mx-1.5');
+				// Add to modal array if not already there
+				if (!this._mobileModalButtons.find(b => b.class === buttonClass)) {
+					this._mobileModalButtons.push({
+						class: buttonClass,
+						createFn: reg.createFn,
+						tooltip: reg.tooltip
+					});
+				}
+				continue;
 			}
 
-			// Add tooltip
-			if (tooltipText) {
-				createClaudeTooltip(button, tooltipText);
+			// Desktop / forced mobile: show button directly
+			// Remove from mobile modal if it was there
+			const modalIndex = this._mobileModalButtons.findIndex(b => b.class === buttonClass);
+			if (modalIndex !== -1) {
+				this._mobileModalButtons.splice(modalIndex, 1);
 			}
 
-			container.appendChild(button);
-			madeChanges = true;
+			// Add button if it doesn't exist
+			if (!container.querySelector('.' + buttonClass)) {
+				const button = reg.createFn();
+				button.classList.add(buttonClass);
+
+				if (isMobile) {
+					button.classList.add('-mx-1.5');
+				}
+
+				if (reg.tooltip) {
+					createClaudeTooltip(button, reg.tooltip);
+				}
+
+				container.appendChild(button);
+
+				if (reg.onInjected) {
+					reg.onInjected(button);
+				}
+			}
 		}
 
-		// Reorder by priority (only our custom buttons live in this container)
+		// Handle "More actions" button for mobile on chat pages
+		if (isMobile && isChatGroup && this._mobileModalButtons.length > 0) {
+			if (!container.querySelector('.more-actions-button')) {
+				const moreButton = createClaudeButton(`
+					<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+						<circle cx="8" cy="2" r="1.5"/>
+						<circle cx="8" cy="8" r="1.5"/>
+						<circle cx="8" cy="14" r="1.5"/>
+					</svg>
+				`, 'icon');
+				moreButton.classList.add('more-actions-button', '-mx-1.5');
+				moreButton.onclick = () => this._showMoreActionsModal();
+				createClaudeTooltip(moreButton, 'More actions');
+				container.appendChild(moreButton);
+			}
+		} else {
+			const moreBtn = container.querySelector('.more-actions-button');
+			if (moreBtn) moreBtn.remove();
+		}
+
+		this._reorderButtons();
+	},
+
+	_reorderButtons() {
+		const container = this._container;
 		const currentButtons = Array.from(container.querySelectorAll('button'));
 
 		const priorityButtons = [];
-		for (const className of BUTTON_PRIORITY) {
+		for (const className of this.BUTTON_PRIORITY) {
 			const button = currentButtons.find(btn => btn.classList.contains(className));
 			if (button) priorityButtons.push(button);
 		}
 
 		const nonPriorityButtons = currentButtons.filter(btn =>
-			!BUTTON_PRIORITY.some(className => btn.classList.contains(className)) &&
+			!this.BUTTON_PRIORITY.some(className => btn.classList.contains(className)) &&
 			!btn.classList.contains('more-actions-button')
 		);
 
@@ -1026,110 +1146,51 @@ function tryAddTopRightButton(buttonClass, createButtonFn, tooltipText = '', for
 
 		if (needsReordering) {
 			desiredOrder.forEach(button => container.appendChild(button));
-			madeChanges = true;
 		}
+	},
 
-		// Remove "More" button if we're on desktop and no buttons need it
-		if (!isMobile && isChatPage) {
-			const moreBtn = container.querySelector('.more-actions-button');
-			if (moreBtn) {
-				moreBtn.remove();
-				madeChanges = true;
+	_updateWigglePosition(anchor) {
+		const wiggle = anchor.parent.querySelector('[data-testid="wiggle-controls-actions"]');
+		if (wiggle && this._container) {
+			this._container.style.right = (wiggle.offsetWidth + 4) + 'px';
+		}
+	},
+
+	_showMoreActionsModal() {
+		const modal = new ClaudeModal('More Actions', '', true);
+
+		const list = document.createElement('div');
+		list.className = 'space-y-2';
+
+		this._mobileModalButtons.forEach(btnInfo => {
+			const button = btnInfo.createFn();
+			const item = document.createElement('div');
+			item.className = 'p-3 rounded bg-bg-200 border border-border-300 hover:bg-bg-300 cursor-pointer transition-colors flex items-center gap-3';
+
+			const iconWrapper = document.createElement('div');
+			iconWrapper.className = 'flex-shrink-0';
+			iconWrapper.innerHTML = button.innerHTML;
+			item.appendChild(iconWrapper);
+
+			if (btnInfo.tooltip) {
+				const label = document.createElement('span');
+				label.className = 'text-text-100 flex-1';
+				label.textContent = btnInfo.tooltip;
+				item.appendChild(label);
 			}
-		}
 
-		return madeChanges;
-	}
+			item.onclick = () => {
+				if (button.onclick) button.onclick();
+				modal.destroy();
+			};
 
-	// If we're not on a chat page, ignore the mobile stuff
-	if (!isChatPage) return false;
-
-	// On mobile AND forceDisplay is false: handle mobile modal logic
-
-	// Remove button from container if it exists
-	const existingButtonInContainer = container.querySelector('.' + buttonClass);
-	if (existingButtonInContainer) {
-		existingButtonInContainer.remove();
-		madeChanges = true;
-	}
-
-	// Add to modal array if not already there
-	const existingButton = mobileModalButtons.find(b => b.class === buttonClass);
-	if (!existingButton) {
-		mobileModalButtons.push({
-			class: buttonClass,
-			createFn: createButtonFn,
-			tooltip: tooltipText
+			list.appendChild(item);
 		});
-		madeChanges = true;
-	}
 
-	// Make sure the "More" button exists in our container
-	if (!container.querySelector('.more-actions-button')) {
-		const moreButton = createClaudeButton(`
-			<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-				<circle cx="8" cy="2" r="1.5"/>
-				<circle cx="8" cy="8" r="1.5"/>
-				<circle cx="8" cy="14" r="1.5"/>
-			</svg>
-		`, 'icon');
-
-		moreButton.classList.add('more-actions-button', '-mx-1.5');
-
-		moreButton.onclick = () => {
-			showMoreActionsModal();
-		};
-
-		createClaudeTooltip(moreButton, 'More actions');
-		container.appendChild(moreButton);
-		madeChanges = true;
-	}
-
-	return madeChanges;
-}
-
-function showMoreActionsModal() {
-	const modal = new ClaudeModal('More Actions', '', true);
-
-	const list = document.createElement('div');
-	list.className = 'space-y-2';
-
-	// Add each stored button to the modal
-	mobileModalButtons.forEach(btnInfo => {
-		const button = btnInfo.createFn();
-		console.log('Adding button to modal:', btnInfo.class);
-		// Create a list item wrapper
-		const item = document.createElement('div');
-		item.className = 'p-3 rounded bg-bg-200 border border-border-300 hover:bg-bg-300 cursor-pointer transition-colors flex items-center gap-3';
-
-		// Add the button content (icon)
-		const iconWrapper = document.createElement('div');
-		iconWrapper.className = 'flex-shrink-0';
-		iconWrapper.innerHTML = button.innerHTML;
-		item.appendChild(iconWrapper);
-
-		// Add the label text from tooltip
-		if (btnInfo.tooltip) {
-			const label = document.createElement('span');
-			label.className = 'text-text-100 flex-1';
-			label.textContent = btnInfo.tooltip;
-			item.appendChild(label);
-		}
-
-		// When clicked, trigger the button's onclick and close modal
-		item.onclick = () => {
-			if (button.onclick) {
-				button.onclick();
-			}
-			modal.destroy();
-		};
-
-		list.appendChild(item);
-	});
-
-	modal.setContent(list);
-	modal.show();
-}
+		modal.setContent(list);
+		modal.show();
+	},
+};
 
 function findMessageControls(messageElement) {
 	// Find the message container (the .group element's parent)

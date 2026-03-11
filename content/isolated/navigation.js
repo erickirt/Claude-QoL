@@ -543,10 +543,13 @@
 	function initialize() {
 		injectTreeStyles();
 		// Add navigation button to top right
-		setInterval(() => {
-			tryAddTopRightButton("navigation-button", createNavigationButton, 'Navigation');
-			addAssistantMessageButtonWithPriority(createBookmarkButton, 'bookmark-button');
-		}, 1000);
+		ButtonBar.register({
+			buttonClass: 'navigation-button',
+			createFn: createNavigationButton,
+			tooltip: 'Navigation',
+			pages: ['chat'],
+		});
+		setInterval(() => addAssistantMessageButtonWithPriority(createBookmarkButton, 'bookmark-button'), 1000);
 
 		setInterval(addUserNavigationButtons, 1000);
 	}

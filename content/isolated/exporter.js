@@ -1779,8 +1779,12 @@
 	}
 
 	function initialize() {
-		tryAddTopRightButton("export-button", createExportButton, "Export/Import chat", false, true, true);
-		setInterval(() => tryAddTopRightButton('export-button', createExportButton, "Export/Import chat", false, true, true), 1000);
+		ButtonBar.register({
+			buttonClass: 'export-button',
+			createFn: createExportButton,
+			tooltip: 'Export/Import chat',
+			pages: ['chat', 'home', 'project'],
+		});
 	}
 
 	// Wait for dependencies to be available

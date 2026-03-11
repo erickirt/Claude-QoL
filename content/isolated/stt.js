@@ -498,10 +498,13 @@
 		});
 		*/
 
-		setInterval(async () => {
-			tryAddTopRightButton("stt-settings-button", createSettingsButton, 'STT Settings', false, true);
-			await tryAddMicButton();
-		}, 1000);
+		ButtonBar.register({
+			buttonClass: 'stt-settings-button',
+			createFn: createSettingsButton,
+			tooltip: 'STT Settings',
+			pages: ['chat', 'home'],
+		});
+		setInterval(() => tryAddMicButton(), 1000);
 	}
 
 	if (document.readyState === 'loading') {

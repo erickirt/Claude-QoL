@@ -202,15 +202,14 @@
 
 	// ======== INITIALIZATION ========
 	function initialize() {
-		if (tryAddTopRightButton('style-selector-button', createStyleButton, "Chat style: Use current", true)) {
-			updateButtonAppearance();
-		}
-
-		setInterval(async () => {
-			if (tryAddTopRightButton('style-selector-button', createStyleButton, "Chat style: Use current", true)) {
-				await updateButtonAppearance();
-			}
-		}, 1000);
+		ButtonBar.register({
+			buttonClass: 'style-selector-button',
+			createFn: createStyleButton,
+			tooltip: 'Chat style: Use current',
+			forceDisplayOnMobile: true,
+			pages: ['chat'],
+			onInjected: () => updateButtonAppearance(),
+		});
 
 		let lastUrl = window.location.href;
 		setInterval(async () => {

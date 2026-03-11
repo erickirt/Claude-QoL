@@ -545,9 +545,12 @@
 		setTimeout(scrollToMessageByUuid, 1000);
 
 		// Add search button to top right
-		setInterval(() => {
-			tryAddTopRightButton("search-button", createSearchButton, 'Search Conversation');
-		}, 1000);
+		ButtonBar.register({
+			buttonClass: 'search-button',
+			createFn: createSearchButton,
+			tooltip: 'Search Conversation',
+			pages: ['chat'],
+		});
 
 		// Check for auto-open search on chat pages (delayed start)
 		setTimeout(() => {

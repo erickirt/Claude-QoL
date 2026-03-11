@@ -1237,7 +1237,13 @@
 
 	function initialize() {
 		addTTSStyles();
-		setInterval(() => tryAddTopRightButton('tts-settings-button', createSettingsButton, "TTS Settings", true, true), 1000);
+		ButtonBar.register({
+			buttonClass: 'tts-settings-button',
+			createFn: createSettingsButton,
+			tooltip: 'TTS Settings',
+			forceDisplayOnMobile: true,
+			pages: ['chat', 'home'],
+		});
 		setInterval(addSpeakButtons, 1000);
 	}
 
