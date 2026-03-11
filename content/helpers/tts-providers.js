@@ -6,6 +6,7 @@
 	class StreamingPlaybackManager {
 		constructor(onStateChange = null) {
 			this.state = 'idle';
+			// Session ID exists to invalidate all queued chunks at once when user hits stop
 			this.currentSessionId = null;
 			this.audioContext = null;
 			this.abortController = null;

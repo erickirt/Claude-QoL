@@ -279,7 +279,8 @@
 		}
 
 		static isAvailable() {
-			return !!(window.SpeechRecognition);
+			const isElectron = navigator.userAgent.toLowerCase().includes('electron');
+			return !isElectron && !!(window.SpeechRecognition);
 		}
 
 		async startRecording(deviceId) {

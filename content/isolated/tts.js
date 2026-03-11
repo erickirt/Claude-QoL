@@ -687,7 +687,10 @@
 			actorSection.appendChild(actorContainer);
 			perChatSection.appendChild(actorSection);
 
-			content.appendChild(perChatSection);
+			// Only add the per-chat section if we're in... a chat.
+			if (window.location.href.includes('claude.ai/chat')) {
+				content.appendChild(perChatSection);
+			}
 
 			// Create modal with new class
 			const modal = new ClaudeModal('TTS Settings', content);
@@ -1177,7 +1180,7 @@
 	}
 
 	function getConversationId() {
-		const match = window.location.pathname.match(/\/chat\/([^/?]+)/);
+		const match = window.location.pathname.match(/\/(?:chat|claude-code-desktop|local_sessions)\/([^/?]+)/);
 		return match ? match[1] : null;
 	}
 	//#endregion

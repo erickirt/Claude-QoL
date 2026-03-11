@@ -251,7 +251,7 @@ class VersionNotificationCard extends FloatingCard {
 		kofiButton.style.marginTop = '10px';
 
 		const kofiImg = document.createElement('img');
-		kofiImg.src = browser.runtime.getURL('kofi-button.png');
+		kofiImg.src = chrome.runtime.getURL('kofi-button.png');
 		kofiImg.height = 36;
 		kofiImg.style.border = '0';
 		kofiImg.alt = 'Buy Me a Coffee at ko-fi.com';
@@ -274,13 +274,13 @@ class QoLNotifications {
 	}
 
 	async checkForVersionUpdate() {
-		const currentVersion = browser.runtime.getManifest().version;
-		const storage = await browser.storage.local.get(['qolPreviousVersion']);
+		const currentVersion = chrome.runtime.getManifest().version;
+		const storage = await chrome.storage.local.get(['qolPreviousVersion']);
 		const previousVersion = storage.qolPreviousVersion;
 
 		// First install - don't show notification
 		if (!previousVersion) {
-			await browser.storage.local.set({ qolPreviousVersion: currentVersion });
+			await chrome.storage.local.set({ qolPreviousVersion: currentVersion });
 			return;
 		}
 
@@ -292,7 +292,7 @@ class QoLNotifications {
 		// Load patch notes
 		let patchHighlights = [];
 		try {
-			const patchNotesFile = await fetch(browser.runtime.getURL('update_patchnotes.txt'));
+			const patchNotesFile = await fetch(chrome.runtime.getURL('update_patchnotes.txt'));
 			if (patchNotesFile.ok) {
 				const patchNotesText = await patchNotesFile.text();
 				patchHighlights = patchNotesText
@@ -303,7 +303,7 @@ class QoLNotifications {
 			console.error('[Claude QoL] Failed to load patch notes:', error);
 		}
 
-		await browser.storage.local.set({ qolPreviousVersion: currentVersion });
+		await chrome.storage.local.set({ qolPreviousVersion: currentVersion });
 
 		const notificationCard = new VersionNotificationCard(previousVersion, currentVersion, patchHighlights);
 		notificationCard.show();

@@ -198,20 +198,47 @@
 
 	// ======== SIDEBAR INJECTION ========
 	async function findSidebarContainers() {
+		// First find the nav element
 		const sidebarNav = document.querySelector('nav.flex');
 		if (!sidebarNav) {
+			console.error('Could not find sidebar nav');
 			return null;
 		}
 
-		const containerWrapper = sidebarNav.querySelector('.flex.flex-grow.flex-col.overflow-y-auto');
+		// This is for claude code on the desktop client and webUI, which has a different UI.
+		if (window.location.pathname.includes('claude-code-desktop') || window.location.pathname.includes('/code')) {
+			const container = sidebarNav.querySelector('.flex-grow.overflow-y-auto')
+			const mainsection = container?.querySelector('.px-1');
+			if (!mainsection) {
+				console.warn('Could not find main section in sidebar for code interface');
+				return null;
+			}
+			// Just insert it before the only section regardless of starred/recents since they don't exist in the same way in the code interface
+			return {
+				container: container,
+				starredSection: mainsection,
+				recentsSection: mainsection
+			};
+		}
+
+		// Look for the main container that holds all sections
+		const containerWrapper = sidebarNav.querySelector('.flex.flex-grow.flex-col.overflow-y-auto')
 		const containers = containerWrapper?.querySelectorAll('.flex-1.relative');
-		const mainContainer = containers[containers.length - 1]?.querySelector('.px-2.mt-4');
+		if (!containers) {
+			console.warn('Could not find any sidebar containers');
+			return null;
+		}
+
+		let mainContainer = containers[containers.length - 1].querySelector('.px-2.mt-4');
+		if (!mainContainer) mainContainer = containers[containers.length - 1].querySelector('.px-2.pt-2');
 		if (!mainContainer) {
+			console.error('Could not find main container in sidebar');
 			return null;
 		}
 
 		// Look for the Starred section
 		const starredSection = mainContainer.querySelector('div.flex.flex-col.mb-4');
+
 		// Check if the Recents section exists as the next sibling
 		let recentsSection = null;
 		if (starredSection) {
@@ -221,9 +248,10 @@
 		}
 
 		if (!recentsSection) {
-			return null;
+			console.error('Could not find any injection site');
 		}
 
+		// Return the parent container so we can insert our UI between Starred and Recents
 		return {
 			container: mainContainer,
 			starredSection: starredSection,
