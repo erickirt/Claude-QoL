@@ -199,13 +199,6 @@ If this is a writing or creative discussion, include sections for characters, pl
 		return modal;
 	}
 
-	function addBranchButtons() {
-		try {
-			addAssistantMessageButtonWithPriority(createBranchButton, 'fork-button');
-		} catch (error) {
-			console.error('Error adding branch buttons:', error);
-		}
-	}
 	//#endregion
 
 	async function forkConversationClicked(messageUuid) {
@@ -1219,5 +1212,10 @@ Provide the complete rewritten summary.`;
 
 	//#endregion
 
-	setInterval(addBranchButtons, 3000);
+	MessageButtonBar.register({
+		buttonClass: 'fork-button',
+		target: 'assistant',
+		createFn: createBranchButton,
+		pages: ['chat'],
+	});
 })();

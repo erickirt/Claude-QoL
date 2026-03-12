@@ -862,7 +862,56 @@ function createClaudeTooltip(element, tooltipText, deleteOnClick) {
 // Modular layout registry for button injection targets.
 // Each layout has match() to detect the page, getAnchor() to find the DOM insertion point.
 // Checked in order; first match() wins.
+// Page layouts for top-right ButtonBar injection only.
+// Each layout defines where the toolbox button container is anchored in the DOM.
+// Code and cowork layouts must be checked before chat/home to avoid false matches.
 const pageLayouts = {
+	codeHome: {
+		group: 'codeHome',
+		match() { return !!window.location.pathname.match(/\/claude-code-desktop\/draft_/); },
+		// Disabled for code web (aka claude.ai/code) for now due to being totally different.
+		getAnchor() {
+			const mainContent = document.getElementById('main-content');
+			if (!mainContent) return null;
+			return { parent: mainContent, referenceNode: null, mode: 'self-container' };
+		},
+	},
+	codeChat: {
+		group: 'codeChat',
+		match() {
+			return !!window.location.pathname.match(/\/claude-code-desktop\/session_/)
+			//|| !!window.location.pathname.match(/\/code\//);	// Disable it on web for now.
+		},
+		getAnchor() {
+			const sticky = document.querySelector('.sticky.top-0.z-20');
+			if (!sticky) return null;
+			const row = sticky.querySelector('.flex.items-center.gap-1');
+			if (!row) return null;
+			// Insert before the share/actions container (last child of the row)
+			const actionsContainer = row.lastElementChild;
+			return { parent: row, referenceNode: actionsContainer, mode: 'inline' };
+		},
+	},
+	coworkHome: {
+		group: 'coworkHome',
+		match() { return window.location.pathname === '/task/new'; },
+		getAnchor() {
+			const mainContent = document.getElementById('main-content');
+			if (!mainContent) return null;
+			return { parent: mainContent, referenceNode: null, mode: 'self-container' };
+		},
+	},
+	coworkChat: {
+		group: 'coworkChat',
+		match() { return window.location.pathname.startsWith('/local_sessions/'); },
+		getAnchor() {
+			const aside = document.querySelector('aside[aria-label="Session activity panel"]');
+			if (!aside) return null;
+			const inner = aside.firstElementChild;
+			if (!inner) return null;
+			return { parent: inner, referenceNode: inner.firstElementChild, mode: 'inline' };
+		},
+	},
 	chatActions: {
 		group: 'chat',
 		match() {
@@ -953,6 +1002,11 @@ const ButtonBar = {
 	_mobileModalButtons: [],
 	_pollInterval: null,
 	_container: null,
+	_currentGroup: null,
+
+	getCurrentGroup() {
+		return this._currentGroup;
+	},
 
 	register({ buttonClass, createFn, tooltip = '', forceDisplayOnMobile = false, pages, onInjected = null }) {
 		if (this._registrations.has(buttonClass)) return;
@@ -965,7 +1019,9 @@ const ButtonBar = {
 
 	_detectLayout() {
 		for (const [name, layout] of Object.entries(pageLayouts)) {
-			if (layout.match()) return { name, ...layout };
+			if (layout.match()) {
+				return { name, ...layout };
+			}
 		}
 		return null;
 	},
@@ -975,9 +1031,11 @@ const ButtonBar = {
 		if (!layout) {
 			document.querySelectorAll('.toolbox-buttons').forEach(el => el.remove());
 			this._container = null;
+			this._currentGroup = null;
 			return;
 		}
 
+		this._currentGroup = layout.group;
 		const anchor = layout.getAnchor();
 		if (!anchor) return;
 
@@ -1032,7 +1090,7 @@ const ButtonBar = {
 					container.className = 'toolbox-buttons absolute top-0 z-20 flex items-center gap-1';
 					container.style.height = '3rem';
 				} else {
-					container.className = 'toolbox-buttons flex items-center gap-1';
+					container.className = 'toolbox-buttons flex items-center justify-end gap-1';
 				}
 				if (anchor.referenceNode) {
 					anchor.parent.insertBefore(container, anchor.referenceNode);
@@ -1048,6 +1106,14 @@ const ButtonBar = {
 		const container = this._container;
 		const isMobile = window.innerHeight > window.innerWidth;
 		const isChatGroup = group === 'chat';
+
+		// Remove buttons that don't belong to the current group
+		for (const [buttonClass, reg] of this._registrations) {
+			if (!reg.pages.includes(group)) {
+				const existing = container.querySelector('.' + buttonClass);
+				if (existing) existing.remove();
+			}
+		}
 
 		for (const [buttonClass, reg] of this._registrations) {
 			// Check if this button should appear on this page type
@@ -1226,40 +1292,87 @@ function getUIMessages() {
 	};
 }
 
-function addAssistantMessageButtonWithPriority(buttonGenerator, buttonClass) {
-	const MESSAGE_BUTTON_PRIORITY = [
+// ======== MESSAGE BUTTON BAR SINGLETON ========
+// Manages per-message buttons (injected into message controls area).
+// Callers register once; MessageButtonBar handles polling, injection, and ordering.
+const MessageButtonBar = {
+	ASSISTANT_BUTTON_PRIORITY: [
 		'tts-speak-button',
 		'fork-button',
-		'bookmark-button'
-	];
+		'bookmark-button',
+	],
+	USER_BUTTON_PRIORITY: [
+		'advanced-edit-button',
+	],
 
-	const messages = getUIMessages().assistantMessages;
-	messages.forEach((message) => {
-		const container = findMessageControls(message);
-		if (!container) {
-			return;
-		}
-		if (container.querySelector('.' + buttonClass)) {
-			return; // Already added
-		}
-		const button = buttonGenerator();
-		button.classList.add(buttonClass);
+	_registrations: new Map(),
+	_pollInterval: null,
 
-		// Find where to insert the button based on priority
+	register({ buttonClass, target, createFn, pages, shouldInject = null, insertFn = null }) {
+		if (this._registrations.has(buttonClass)) return;
+		this._registrations.set(buttonClass, { buttonClass, target, createFn, pages, shouldInject, insertFn });
+		if (!this._pollInterval) {
+			this._pollInterval = setInterval(() => this._tick(), 1000);
+			this._tick();
+		}
+	},
+
+	async _tick() {
+		// Detect current page group (reuse ButtonBar's detection or detect independently)
+		let group = ButtonBar.getCurrentGroup();
+		if (!group) {
+			// ButtonBar may not have ticked yet — detect independently
+			for (const layout of Object.values(pageLayouts)) {
+				if (layout.match()) { group = layout.group; break; }
+			}
+		}
+		if (!group) return;
+
+		const { assistantMessages, userMessages } = getUIMessages();
+
+		for (const [buttonClass, reg] of this._registrations) {
+			if (!reg.pages.includes(group)) continue;
+
+			if (reg.shouldInject) {
+				const allowed = await reg.shouldInject();
+				if (!allowed) continue;
+			}
+
+			const messages = reg.target === 'assistant' ? assistantMessages : userMessages;
+			const priorityArray = reg.target === 'assistant'
+				? this.ASSISTANT_BUTTON_PRIORITY
+				: this.USER_BUTTON_PRIORITY;
+
+			for (const message of messages) {
+				const container = findMessageControls(message);
+				if (!container) continue;
+				if (container.querySelector('.' + buttonClass)) continue;
+
+				const button = reg.createFn();
+				button.classList.add(buttonClass);
+
+				if (reg.insertFn) {
+					reg.insertFn(button, container);
+				} else {
+					this._defaultInsert(button, buttonClass, container, priorityArray);
+				}
+			}
+		}
+	},
+
+	_defaultInsert(button, buttonClass, container, priorityArray) {
 		let insertBefore = null;
 
-		// Look for the first existing button with lower priority
-		const currentPriority = MESSAGE_BUTTON_PRIORITY.indexOf(buttonClass);
-
-		for (let i = currentPriority + 1; i < MESSAGE_BUTTON_PRIORITY.length; i++) {
-			const lowerPriorityButton = container.querySelector('.' + MESSAGE_BUTTON_PRIORITY[i]);
+		const currentPriority = priorityArray.indexOf(buttonClass);
+		for (let i = currentPriority + 1; i < priorityArray.length; i++) {
+			const lowerPriorityButton = container.querySelector('.' + priorityArray[i]);
 			if (lowerPriorityButton) {
 				insertBefore = lowerPriorityButton;
 				break;
 			}
 		}
 
-		// If no lower priority custom button found, try to insert before the copy button group
+		// Fallback: insert before the copy button group
 		if (!insertBefore) {
 			const copyButtonParent = container.querySelector('[data-testid="action-bar-copy"]')?.parentElement;
 			if (copyButtonParent) {
@@ -1267,15 +1380,13 @@ function addAssistantMessageButtonWithPriority(buttonGenerator, buttonClass) {
 			}
 		}
 
-		// Insert the button
 		if (insertBefore) {
 			container.insertBefore(button, insertBefore);
 		} else {
-			// If no reference point found, just append at the end
 			container.appendChild(button);
 		}
-	});
-}
+	},
+};
 
 
 // Simple alert overwrite for ISOLATED context

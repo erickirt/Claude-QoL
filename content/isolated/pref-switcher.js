@@ -201,7 +201,7 @@
 		// First find the nav element
 		const sidebarNav = document.querySelector('nav.flex');
 		if (!sidebarNav) {
-			console.error('Could not find sidebar nav');
+			if (!window.location.pathname.includes('/code')) console.error('Could not find sidebar nav');
 			return null;
 		}
 

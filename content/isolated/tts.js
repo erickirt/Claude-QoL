@@ -442,10 +442,9 @@
 		return text;
 	}
 
-	async function addSpeakButtons() {
+	async function addArtifactSpeakButtons() {
 		const settings = await loadSettings();
 		if (!settings.enabled) return;
-		addAssistantMessageButtonWithPriority(createSpeakButton, 'tts-speak-button');
 
 		// Handle artifact buttons
 		const buttonsRow = findArtifactButtonsRow();
@@ -625,8 +624,12 @@
 			// Auto-speak toggle
 			const autoSpeakSection = document.createElement('div');
 			autoSpeakSection.className = 'mb-4';
-			const autoSpeakToggle = createClaudeToggle('Auto-speak new messages', settings.autoSpeak, null);
+			const autoSpeakToggle = createClaudeToggle('Auto-speak on new message', settings.autoSpeak, null);
 			autoSpeakSection.appendChild(autoSpeakToggle.container);
+			const autoSpeakNote = document.createElement('p');
+			autoSpeakNote.className = CLAUDE_CLASSES.TEXT_MUTED + ' mt-1';
+			autoSpeakNote.textContent = 'Only works on normal chats (not cowork, not code)';
+			autoSpeakSection.appendChild(autoSpeakNote);
 			content.appendChild(autoSpeakSection);
 
 			// Per-Chat Settings Section
@@ -1242,9 +1245,16 @@
 			createFn: createSettingsButton,
 			tooltip: 'TTS Settings',
 			forceDisplayOnMobile: true,
-			pages: ['chat', 'home'],
+			pages: ['chat', 'home', 'coworkHome', 'coworkChat'],
 		});
-		setInterval(addSpeakButtons, 1000);
+		MessageButtonBar.register({
+			buttonClass: 'tts-speak-button',
+			target: 'assistant',
+			createFn: createSpeakButton,
+			pages: ['chat', 'coworkChat'],
+			shouldInject: async () => (await loadSettings()).enabled,
+		});
+		setInterval(addArtifactSpeakButtons, 1000);
 	}
 
 	// Wait for DOM to be ready before initializing

@@ -448,24 +448,27 @@
 			if (existing) existing.remove();
 			return;
 		}
-
+		if (window.location.href.includes('claude.ai/code')) return; // Don't show in code web
 		if (document.querySelector('.stt-mic-container')) return;
 
 		// Use model-selector-dropdown as a stable landmark to find the input toolbar.
 		// This works regardless of whether the send button or voice button is showing.
-		// Structure: button -> div.overflow-hidden -> div.transition-all (toolbar child)
 		const modelSelector = document.querySelector('button[data-testid="model-selector-dropdown"]');
 		if (!modelSelector) return;
 
-		const modelSelectorSection = modelSelector.parentElement?.parentElement;
-		if (!modelSelectorSection) return;
+		// Walk up to the toolbar row (flex items-center container)
+		const toolbar = modelSelector.closest('.flex.items-center');
+		if (!toolbar) return;
 
-		// Next sibling is the send/voice button area
-		const sendArea = modelSelectorSection.nextElementSibling;
+		// Find the model selector's direct child within the toolbar, then insert after it
+		let modelSection = modelSelector;
+		while (modelSection.parentElement !== toolbar) modelSection = modelSection.parentElement;
+
+		const sendArea = modelSection.nextElementSibling;
 		if (!sendArea) return;
 
 		const micContainer = createMicButton();
-		sendArea.parentElement.insertBefore(micContainer, sendArea);
+		toolbar.insertBefore(micContainer, sendArea);
 	}
 
 	// ======== INITIALIZATION ========
@@ -502,7 +505,7 @@
 			buttonClass: 'stt-settings-button',
 			createFn: createSettingsButton,
 			tooltip: 'STT Settings',
-			pages: ['chat', 'home'],
+			pages: ['chat', 'home', 'coworkHome', 'codeHome', 'coworkChat', 'codeChat'],
 		});
 		setInterval(() => tryAddMicButton(), 1000);
 	}

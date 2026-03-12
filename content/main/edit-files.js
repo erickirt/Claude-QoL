@@ -16,35 +16,8 @@
 	//#endregion
 
 	//#region Edit Button Interception
-	function addAdvancedEditButtons() {
-		// This is here rather than claude-styles because... no good reason.
-		// TODO: Move it. Make it generic like the other one.
-		const { userMessages } = getUIMessages();
-		userMessages.forEach(messageEl => {
-			const controlsContainer = findMessageControls(messageEl);
-			if (!controlsContainer) return;
-
-			// Check if we already added our button
-			if (controlsContainer.querySelector('.advanced-edit-button')) return;
-
-			// Find the edit button by its unique SVG path (pencil icon)
-			const allButtons = controlsContainer.querySelectorAll('button[type="button"]');
-			let editButton = null;
-			let editButtonWrapper = null;
-
-			for (const button of allButtons) {
-				const svgPath = button.querySelector('svg path');
-				if (svgPath && svgPath.getAttribute('d')?.startsWith('M9.72821 2.87934')) {
-					editButton = button;
-					editButtonWrapper = button.closest('div.w-fit');
-					break;
-				}
-			}
-
-			if (!editButton || !editButtonWrapper) return;
-
-			// Create our advanced edit button
-			const svgContent = `
+	function createAdvancedEditButton() {
+		const svgContent = `
             <div class="flex items-center justify-center" style="width: 20px; height: 20px;">
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" class="shrink-0" aria-hidden="true" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" style="color: currentColor;">
                     <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h9"/>
@@ -54,37 +27,48 @@
             </div>
         `;
 
-			const advancedEditBtn = createClaudeButton(svgContent, 'icon-message');
-			advancedEditBtn.type = 'button';
-			advancedEditBtn.setAttribute('data-state', 'closed');
-			advancedEditBtn.setAttribute('aria-label', 'Advanced Edit');
-			advancedEditBtn.classList.add('advanced-edit-button');
-			advancedEditBtn.classList.add('h-8', 'w-8');
+		const btn = createClaudeButton(svgContent, 'icon-message');
+		btn.type = 'button';
+		btn.setAttribute('data-state', 'closed');
+		btn.setAttribute('aria-label', 'Advanced Edit');
+		btn.classList.add('h-8', 'w-8');
+		createClaudeTooltip(btn, 'Advanced Edit', true);
+		return btn;
+	}
 
-			createClaudeTooltip(advancedEditBtn, 'Advanced Edit', true);
+	function insertAdvancedEditButton(button, controlsContainer) {
+		// Find the native edit button by its unique SVG path (pencil icon)
+		const allButtons = controlsContainer.querySelectorAll('button[type="button"]');
+		let editButton = null;
+		let editButtonWrapper = null;
 
-			advancedEditBtn.onclick = async (e) => {
-				e.preventDefault();
-				e.stopPropagation();
+		for (const btn of allButtons) {
+			const svgPath = btn.querySelector('svg path');
+			if (svgPath && svgPath.getAttribute('d')?.startsWith('M9.72821 2.87934')) {
+				editButton = btn;
+				editButtonWrapper = btn.closest('div.w-fit');
+				break;
+			}
+		}
 
-				console.log('Advanced edit button clicked');
-				editButton.click();
-				pendingEditIntercept = true;
+		if (!editButton || !editButtonWrapper) return;
 
-				setTimeout(async () => {
-					autoSubmitEdit();
-				}, 100);
-			};
+		button.onclick = async (e) => {
+			e.preventDefault();
+			e.stopPropagation();
+			editButton.click();
+			pendingEditIntercept = true;
+			setTimeout(async () => { autoSubmitEdit(); }, 100);
+		};
 
-			// Create wrapper div matching the structure
-			const advancedEditWrapper = document.createElement('div');
-			advancedEditWrapper.className = 'w-fit';
-			advancedEditWrapper.setAttribute('data-state', 'closed');
-			advancedEditWrapper.appendChild(advancedEditBtn);
+		// Create wrapper div matching the structure
+		const wrapper = document.createElement('div');
+		wrapper.className = 'w-fit';
+		wrapper.setAttribute('data-state', 'closed');
+		wrapper.appendChild(button);
 
-			// Insert before the edit button wrapper
-			editButtonWrapper.parentElement.insertBefore(advancedEditWrapper, editButtonWrapper);
-		});
+		// Insert before the native edit button wrapper
+		editButtonWrapper.parentElement.insertBefore(wrapper, editButtonWrapper);
 	}
 
 	function updateMessageUI(messageElement, newText) {
@@ -912,6 +896,11 @@
 	};
 	//#endregion
 
-	// Initialize - start checking for edit buttons every 2 seconds
-	setInterval(addAdvancedEditButtons, 2000);
+	MessageButtonBar.register({
+		buttonClass: 'advanced-edit-button',
+		target: 'user',
+		createFn: createAdvancedEditButton,
+		pages: ['chat'],
+		insertFn: insertAdvancedEditButton,
+	});
 })();

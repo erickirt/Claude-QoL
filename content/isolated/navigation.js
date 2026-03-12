@@ -549,7 +549,12 @@
 			tooltip: 'Navigation',
 			pages: ['chat'],
 		});
-		setInterval(() => addAssistantMessageButtonWithPriority(createBookmarkButton, 'bookmark-button'), 1000);
+		MessageButtonBar.register({
+			buttonClass: 'bookmark-button',
+			target: 'assistant',
+			createFn: createBookmarkButton,
+			pages: ['chat'],
+		});
 
 		setInterval(addUserNavigationButtons, 1000);
 	}
