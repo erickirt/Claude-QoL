@@ -1,2 +1,1 @@
-HOTFIX: Stop accidentally sending /project API calls twice (this was causing files to be uploaded twice!)
-Please check if you were affected by this bug!
+Improve desktop client compatibility
