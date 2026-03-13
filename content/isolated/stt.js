@@ -473,6 +473,7 @@
 
 	// ======== INITIALIZATION ========
 	async function initialize() {
+		if (navigator.userAgent.toLowerCase().includes('electron')) return;
 		const style = document.createElement('style');
 		style.id = 'stt-spinner-style';
 		style.textContent = `
