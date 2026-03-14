@@ -1023,6 +1023,15 @@ class ClaudeMessage {
 		for (const a of json.attachments || []) {
 			this.attachFile(parseFileFromAPI(a, this.conversation));
 		}
+
+		// Parse files array (assistant messages often only have files here, not files_v2)
+		// Deduplicate by file_uuid since human messages have files in both arrays
+		const existingUuids = new Set(this._files.map(f => f.file_uuid).filter(Boolean));
+		for (const f of json.files || []) {
+			if (f.file_uuid && !existingUuids.has(f.file_uuid)) {
+				this.attachFile(parseFileFromAPI(f, this.conversation));
+			}
+		}
 	}
 
 	// Helper to get/set text content for human messages
