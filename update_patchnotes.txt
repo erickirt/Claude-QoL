@@ -1,1 +1,4 @@
-Improve desktop client compatibility
+Support tool-created files for exports
+Added a helper scripts that shows tool-generated images inline
+UI bugfixes
+Improved desktop client compatibility

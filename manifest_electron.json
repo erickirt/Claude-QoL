@@ -1,7 +1,7 @@
 {
 	"manifest_version": 3,
 	"name": "Claude QoL - Export, Fork, Search, and more",
-	"version": "2.5.2",
+	"version": "2.5.3",
 	"description": "Collection of claude.ai enhancements: Exporting/Importing chats, Forking, Text Search, Bookmarks, TTS, STT, and more.",
 	"permissions": [
 		"storage"
@@ -56,7 +56,8 @@
 				"content/main/file-download.js",
 				"content/main/pref-switcher-fetch-watcher.js",
 				"content/main/styles-fetch-interceptor.js",
-				"content/main/tts-interceptor.js"
+				"content/main/tts-interceptor.js",
+				"content/main/image-extractor.js"
 			],
 			"world": "MAIN",
 			"run_at": "document_start"
