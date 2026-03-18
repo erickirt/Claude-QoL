@@ -2,30 +2,52 @@
 (function () {
 	'use strict';
 
-	const STORAGE_KEY = 'navigation_bookmarks';
+	const _NAV_KEY = SETTINGS_KEYS.NAVIGATION.BOOKMARKS;
 
-	// #region  STORAGE MANAGEMENT 
-	function getBookmarks(conversationId) {
-		const allBookmarks = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+	// #region  STORAGE MANAGEMENT
+	// One-time migration from localStorage
+	let _navMigrationDone = false;
+	async function _migrateLocalStorageBookmarks() {
+		if (_navMigrationDone) return;
+		_navMigrationDone = true;
+		const legacy = localStorage.getItem('navigation_bookmarks');
+		if (!legacy) return;
+		try {
+			const parsed = JSON.parse(legacy);
+			const current = await settingsRegistry.get(_NAV_KEY);
+			// Only migrate if registry is empty (default)
+			if (Object.keys(current).length === 0 && Object.keys(parsed).length > 0) {
+				await settingsRegistry.set(_NAV_KEY, parsed);
+			}
+			localStorage.removeItem('navigation_bookmarks');
+		} catch (e) {
+			console.error('[Navigation] Failed to migrate bookmarks from localStorage:', e);
+		}
+	}
+
+	async function getBookmarks(conversationId) {
+		await _migrateLocalStorageBookmarks();
+		const allBookmarks = await settingsRegistry.get(_NAV_KEY);
 		return allBookmarks[conversationId] || {};
 	}
 
-	function saveBookmarks(conversationId, bookmarks) {
-		const allBookmarks = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+	async function saveBookmarks(conversationId, bookmarks) {
+		await _migrateLocalStorageBookmarks();
+		const allBookmarks = await settingsRegistry.get(_NAV_KEY);
 		allBookmarks[conversationId] = bookmarks;
-		localStorage.setItem(STORAGE_KEY, JSON.stringify(allBookmarks));
+		await settingsRegistry.set(_NAV_KEY, allBookmarks);
 	}
 
-	function addBookmark(conversationId, name, leafUuid) {
-		const bookmarks = getBookmarks(conversationId);
+	async function addBookmark(conversationId, name, leafUuid) {
+		const bookmarks = await getBookmarks(conversationId);
 		bookmarks[name] = leafUuid;
-		saveBookmarks(conversationId, bookmarks);
+		await saveBookmarks(conversationId, bookmarks);
 	}
 
-	function deleteBookmark(conversationId, name) {
-		const bookmarks = getBookmarks(conversationId);
+	async function deleteBookmark(conversationId, name) {
+		const bookmarks = await getBookmarks(conversationId);
 		delete bookmarks[name];
-		saveBookmarks(conversationId, bookmarks);
+		await saveBookmarks(conversationId, bookmarks);
 	}
 
 	// #endregion
@@ -48,13 +70,13 @@
 			'Bookmark Name:',
 			'Enter bookmark name...',
 			'',
-			(value) => {
+			async (value) => {
 				if (!value) {
 					return 'Please enter a bookmark name';
 				}
 
 				// Check for duplicate names
-				const bookmarks = getBookmarks(conversationId);
+				const bookmarks = await getBookmarks(conversationId);
 				if (bookmarks[value]) {
 					return 'A bookmark with this name already exists';
 				}
@@ -63,7 +85,7 @@
 			}
 		);
 
-		addBookmark(conversationId, name, currentLeafId);
+		await addBookmark(conversationId, name, currentLeafId);
 		return name;
 	}
 
@@ -80,7 +102,7 @@
 		}
 
 		// Get all bookmarks
-		const bookmarks = getBookmarks(conversationId);
+		const bookmarks = await getBookmarks(conversationId);
 		const bookmarkUuids = Object.values(bookmarks);
 
 		// Build tree structure
@@ -194,7 +216,7 @@
 				e.stopPropagation();
 				const confirmed = await showClaudeConfirm('Delete Bookmark', `Are you sure you want to delete the bookmark "${bookmark.name}"?`);
 				if (confirmed) {
-					deleteBookmark(conversationId, bookmark.name);
+					await deleteBookmark(conversationId, bookmark.name);
 					onDelete();
 				}
 			};

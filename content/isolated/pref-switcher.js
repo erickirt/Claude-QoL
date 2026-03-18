@@ -70,8 +70,7 @@
 
 	// ======== PRESET MANAGEMENT ========
 	async function getStoredPresets() {
-		const result = await chrome.storage.local.get('preference_presets');
-		const presets = result.preference_presets || {};
+		const presets = await settingsRegistry.get(SETTINGS_KEYS.PREF_SWITCHER.PRESETS);
 		// Ensure "None" preset always exists
 		if (!presets['None']) {
 			presets['None'] = {
@@ -90,7 +89,7 @@
 			content: content.trim(),  // <-- Trim on save
 			lastModified: Date.now()
 		};
-		await chrome.storage.local.set({ preference_presets: presets });
+		await settingsRegistry.set(SETTINGS_KEYS.PREF_SWITCHER.PRESETS, presets);
 	}
 
 	async function getCurrentPresetName() {
@@ -432,7 +431,7 @@
 			if (await showClaudeConfirm(`Delete preset "${presetName}"?`)) {
 				const presets = await getStoredPresets();
 				delete presets[presetName];
-				await chrome.storage.local.set({ preference_presets: presets });
+				await settingsRegistry.set(SETTINGS_KEYS.PREF_SWITCHER.PRESETS, presets);
 
 				// Switch to None preset
 				await setPreferences('');

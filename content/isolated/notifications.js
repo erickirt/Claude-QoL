@@ -275,12 +275,11 @@ class QoLNotifications {
 
 	async checkForVersionUpdate() {
 		const currentVersion = chrome.runtime.getManifest().version;
-		const storage = await chrome.storage.local.get(['qolPreviousVersion']);
-		const previousVersion = storage.qolPreviousVersion;
+		const previousVersion = await settingsRegistry.get(SETTINGS_KEYS.NOTIFICATIONS.PREVIOUS_VERSION);
 
 		// First install - don't show notification
 		if (!previousVersion) {
-			await chrome.storage.local.set({ qolPreviousVersion: currentVersion });
+			await settingsRegistry.set(SETTINGS_KEYS.NOTIFICATIONS.PREVIOUS_VERSION, currentVersion);
 			return;
 		}
 
@@ -303,7 +302,7 @@ class QoLNotifications {
 			console.error('[Claude QoL] Failed to load patch notes:', error);
 		}
 
-		await chrome.storage.local.set({ qolPreviousVersion: currentVersion });
+		await settingsRegistry.set(SETTINGS_KEYS.NOTIFICATIONS.PREVIOUS_VERSION, currentVersion);
 
 		const notificationCard = new VersionNotificationCard(previousVersion, currentVersion, patchHighlights);
 		notificationCard.show();

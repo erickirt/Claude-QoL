@@ -28,28 +28,22 @@ const SETTINGS_KEYS = {
 	},
 	// Per-chat settings: each stores { conversationId: value, ... }
 	TTS_PERCHAT: {
-		VOICE: { key: 'tts_chatVoice', default: {}, type: 'object' },
-		ACTOR_MODE: { key: 'tts_chatActorMode', default: {}, type: 'object' },
-		CHARACTERS: { key: 'tts_chatCharacters', default: {}, type: 'object' },
-		QUOTES_ONLY: { key: 'tts_chatQuotesOnly', default: {}, type: 'object' },
+		VOICE: { key: 'tts_chatVoice', default: {}, type: 'object', oldKeyPrefix: 'chatVoice_' },
+		ACTOR_MODE: { key: 'tts_chatActorMode', default: {}, type: 'object', oldKeyPrefix: 'chatActorMode_' },
+		CHARACTERS: { key: 'tts_chatCharacters', default: {}, type: 'object', oldKeyPrefix: 'chatCharacters_' },
+		QUOTES_ONLY: { key: 'tts_chatQuotesOnly', default: {}, type: 'object', oldKeyPrefix: 'chatQuotesOnly_' },
 	},
 	PERCHAT_STYLES: {
-		STYLES: { key: 'perchat_styles', default: {}, type: 'object' },
+		STYLES: { key: 'perchat_styles', default: {}, type: 'object', oldKeyPrefix: 'style_' },
 	},
 	NAVIGATION: {
 		BOOKMARKS: { key: 'navigation_bookmarks', default: {}, type: 'object' },
-	},
-	EXPORTER: {
-		LAST_FORMAT: { key: 'lastExportFormat', default: 'html_html', type: 'string' },
 	},
 	NOTIFICATIONS: {
 		PREVIOUS_VERSION: { key: 'qolPreviousVersion', default: null, type: 'string' },
 	},
 	PREF_SWITCHER: {
 		PRESETS: { key: 'preference_presets', default: {}, type: 'object' },
-	},
-	SHORTCUTS: {
-		REGISTRY: { key: 'shortcut_registry', default: {}, type: 'object' },
 	},
 };
 
@@ -148,6 +142,48 @@ if (_isIsolatedWorld) {
 		return () => _changeListeners[key].delete(callback);
 	};
 
+	// ======== Per-chat helpers (ISOLATED world) ========
+
+	settingsRegistry.getPerChat = async function (def, conversationId) {
+		const key = _resolveKey(def);
+		const result = await chrome.storage.local.get(key);
+		const obj = result[key] || {};
+
+		if (obj[conversationId] !== undefined) return obj[conversationId];
+
+		// Lazy migration: check old key format
+		const oldPrefix = typeof def !== 'string' ? def.oldKeyPrefix : null;
+		if (oldPrefix) {
+			const oldKey = oldPrefix + conversationId;
+			const oldResult = await chrome.storage.local.get(oldKey);
+			if (oldResult[oldKey] !== undefined) {
+				// Migrate forward: write to new object, delete old key
+				obj[conversationId] = oldResult[oldKey];
+				await chrome.storage.local.set({ [key]: obj });
+				await chrome.storage.local.remove(oldKey);
+				return oldResult[oldKey];
+			}
+		}
+
+		return null;
+	};
+
+	settingsRegistry.setPerChat = async function (def, conversationId, value) {
+		const key = _resolveKey(def);
+		const result = await chrome.storage.local.get(key);
+		const obj = result[key] || {};
+		obj[conversationId] = value;
+		await chrome.storage.local.set({ [key]: obj });
+	};
+
+	settingsRegistry.removePerChat = async function (def, conversationId) {
+		const key = _resolveKey(def);
+		const result = await chrome.storage.local.get(key);
+		const obj = result[key] || {};
+		delete obj[conversationId];
+		await chrome.storage.local.set({ [key]: obj });
+	};
+
 	// ======== PostMessage bridge for MAIN world access ========
 	window.addEventListener('message', async (event) => {
 		if (event.source !== window) return;
@@ -170,6 +206,34 @@ if (_isIsolatedWorld) {
 					await chrome.storage.local.set({ [event.data.key]: event.data.value });
 					window.postMessage({
 						type: 'SETTINGS_SET_RESULT',
+						messageId: event.data.messageId
+					}, '*');
+					break;
+				}
+				case 'SETTINGS_GET_PERCHAT': {
+					const def = _settingsDefinitions[event.data.key] || { key: event.data.key };
+					const value = await settingsRegistry.getPerChat(def, event.data.conversationId);
+					window.postMessage({
+						type: 'SETTINGS_GET_PERCHAT_RESULT',
+						messageId: event.data.messageId,
+						value: value
+					}, '*');
+					break;
+				}
+				case 'SETTINGS_SET_PERCHAT': {
+					const def = _settingsDefinitions[event.data.key] || { key: event.data.key };
+					await settingsRegistry.setPerChat(def, event.data.conversationId, event.data.value);
+					window.postMessage({
+						type: 'SETTINGS_SET_PERCHAT_RESULT',
+						messageId: event.data.messageId
+					}, '*');
+					break;
+				}
+				case 'SETTINGS_REMOVE_PERCHAT': {
+					const def = _settingsDefinitions[event.data.key] || { key: event.data.key };
+					await settingsRegistry.removePerChat(def, event.data.conversationId);
+					window.postMessage({
+						type: 'SETTINGS_REMOVE_PERCHAT_RESULT',
 						messageId: event.data.messageId
 					}, '*');
 					break;
@@ -203,6 +267,22 @@ if (_isIsolatedWorld) {
 	settingsRegistry.onChange = function () {
 		console.warn('[SettingsRegistry] onChange is not available in MAIN world');
 		return () => { };
+	};
+
+	settingsRegistry.getPerChat = async function (def, conversationId) {
+		const key = _resolveKey(def);
+		const result = await _bridgeRequest('SETTINGS_GET_PERCHAT', { key, conversationId }, 'SETTINGS_GET_PERCHAT_RESULT');
+		return result ? result.value : null;
+	};
+
+	settingsRegistry.setPerChat = async function (def, conversationId, value) {
+		const key = _resolveKey(def);
+		await _bridgeRequest('SETTINGS_SET_PERCHAT', { key, conversationId, value }, 'SETTINGS_SET_PERCHAT_RESULT');
+	};
+
+	settingsRegistry.removePerChat = async function (def, conversationId) {
+		const key = _resolveKey(def);
+		await _bridgeRequest('SETTINGS_REMOVE_PERCHAT', { key, conversationId }, 'SETTINGS_REMOVE_PERCHAT_RESULT');
 	};
 }
 

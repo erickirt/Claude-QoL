@@ -2,6 +2,9 @@
 (function () {
 	'use strict';
 
+	const T = SETTINGS_KEYS.TTS;
+	const TP = SETTINGS_KEYS.TTS_PERCHAT;
+
 	//#region SVG Icons
 	const SPEAKER_ICON = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 16 16">
         <path d="M10 2.5L5.5 5.5H2v5h3.5L10 13.5v-11z" stroke-linejoin="round"/>
@@ -74,12 +77,10 @@
 	// Updated playback function that uses actor mode
 	async function playText(text, settings, conversationId) {
 		// Check if actor mode is enabled for this conversation
-		const actorModeResult = await chrome.storage.local.get(`chatActorMode_${conversationId}`);
-		const actorModeEnabled = actorModeResult[`chatActorMode_${conversationId}`] === true;
+		const actorModeEnabled = (await settingsRegistry.getPerChat(TP.ACTOR_MODE, conversationId)) === true;
 
 		// Get the voice for this chat (either override or default)
-		const voiceResult = await chrome.storage.local.get(`chatVoice_${conversationId}`);
-		const voiceOverride = voiceResult[`chatVoice_${conversationId}`] || '';
+		const voiceOverride = (await settingsRegistry.getPerChat(TP.VOICE, conversationId)) || '';
 		const defaultVoiceId = voiceOverride || settings.voice;
 
 		// Get baseUrl for OpenAI provider
@@ -91,8 +92,7 @@
 		}
 
 		// Actor mode is enabled - get character configurations
-		const charactersResult = await chrome.storage.local.get(`chatCharacters_${conversationId}`);
-		const characters = charactersResult[`chatCharacters_${conversationId}`] || [];
+		const characters = (await settingsRegistry.getPerChat(TP.CHARACTERS, conversationId)) || [];
 
 		if (characters.length === 0) {
 			console.log('Actor mode enabled but no characters configured, using default voice');
@@ -269,8 +269,7 @@
 			const conversationId = getConversationId();
 
 
-			const quotesResult = await chrome.storage.local.get(`chatQuotesOnly_${conversationId}`);
-			const quotesOnly = quotesResult[`chatQuotesOnly_${conversationId}`] === true; // Explicitly check for true
+			const quotesOnly = (await settingsRegistry.getPerChat(TP.QUOTES_ONLY, conversationId)) === true; // Explicitly check for true
 
 			if (ttsProvider && ttsProvider.requiresApiKey && settings.apiKey) {
 				const isValid = await ttsProvider.testApiKey(settings.apiKey);
@@ -365,9 +364,7 @@
 			const settings = await loadSettings();
 			const conversationId = getConversationId();
 
-
-			const quotesResult = await chrome.storage.local.get(`chatQuotesOnly_${conversationId}`);
-			const quotesOnly = quotesResult[`chatQuotesOnly_${conversationId}`] === true;
+			const quotesOnly = (await settingsRegistry.getPerChat(TP.QUOTES_ONLY, conversationId)) === true;
 
 			if (ttsProvider && ttsProvider.requiresApiKey && settings.apiKey) {
 				const isValid = await ttsProvider.testApiKey(settings.apiKey);
@@ -489,10 +486,10 @@
 			const conversationId = getConversationId();
 
 			// Load per-chat settings
-			const [quotesResult, voiceResult, actorResult] = await Promise.all([
-				chrome.storage.local.get(`chatQuotesOnly_${conversationId}`),
-				chrome.storage.local.get(`chatVoice_${conversationId}`),
-				chrome.storage.local.get(`chatActorMode_${conversationId}`)
+			const [chatQuotesOnly, chatVoiceOverride, actorModeEnabled] = await Promise.all([
+				settingsRegistry.getPerChat(TP.QUOTES_ONLY, conversationId).then(v => v === true),
+				settingsRegistry.getPerChat(TP.VOICE, conversationId).then(v => v || ''),
+				settingsRegistry.getPerChat(TP.ACTOR_MODE, conversationId).then(v => v === true)
 			]);
 
 			const providerOptions = Object.entries(window.TTSProviders.TTS_PROVIDERS).map(([key, info]) => ({
@@ -500,10 +497,6 @@
 				label: info.name
 			}));
 			const currentProviderInfo = window.TTSProviders.TTS_PROVIDERS[settings.provider];
-
-			const chatQuotesOnly = quotesResult[`chatQuotesOnly_${conversationId}`] === true;
-			const chatVoiceOverride = voiceResult[`chatVoice_${conversationId}`] || '';
-			const actorModeEnabled = actorResult[`chatActorMode_${conversationId}`] === true;
 
 			// Load voices and models if API key exists
 			let voices = [];
@@ -737,22 +730,18 @@
 
 					if (quotesOnlyValue && actorModeValue) {
 						// Shouldn't happen, but if it does, prefer actor mode
-						await chrome.storage.local.set({
-							[`chatQuotesOnly_${conversationId}`]: false,
-							[`chatActorMode_${conversationId}`]: true
-						});
+						await settingsRegistry.setPerChat(TP.QUOTES_ONLY, conversationId, false);
+						await settingsRegistry.setPerChat(TP.ACTOR_MODE, conversationId, true);
 					} else {
-						await chrome.storage.local.set({
-							[`chatQuotesOnly_${conversationId}`]: quotesOnlyValue,
-							[`chatActorMode_${conversationId}`]: actorModeValue
-						});
+						await settingsRegistry.setPerChat(TP.QUOTES_ONLY, conversationId, quotesOnlyValue);
+						await settingsRegistry.setPerChat(TP.ACTOR_MODE, conversationId, actorModeValue);
 					}
 
 					const chatOverride = chatVoiceOverrideSelect.value;
 					if (chatOverride) {
-						await chrome.storage.local.set({ [`chatVoice_${conversationId}`]: chatOverride });
+						await settingsRegistry.setPerChat(TP.VOICE, conversationId, chatOverride);
 					} else {
-						await chrome.storage.local.remove(`chatVoice_${conversationId}`);
+						await settingsRegistry.removePerChat(TP.VOICE, conversationId);
 					}
 				}
 
@@ -924,8 +913,7 @@
 
 		try {
 			const conversationId = getConversationId();
-			const charactersResult = await chrome.storage.local.get(`chatCharacters_${conversationId}`);
-			let characters = charactersResult[`chatCharacters_${conversationId}`] || [];
+			let characters = (await settingsRegistry.getPerChat(TP.CHARACTERS, conversationId)) || [];
 
 			// Ensure narrator exists
 			if (!characters.find(c => c.name.toLowerCase() === 'narrator')) {
@@ -1110,7 +1098,7 @@
 					.filter(char => char.name);
 
 				if (charactersData.length > 0) {
-					await chrome.storage.local.set({ [`chatCharacters_${conversationId}`]: charactersData });
+					await settingsRegistry.setPerChat(TP.CHARACTERS, conversationId, charactersData);
 				}
 			});
 
@@ -1149,37 +1137,37 @@
 	}
 
 	async function loadSettings() {
-		const result = await chrome.storage.local.get([
-			'tts_enabled',
-			'tts_provider',  // NEW
-			'tts_apiKey',
-			'tts_voice',
-			'tts_model',
-			'tts_autoSpeak',
-			'openai_tts_base_url'
+		const [enabled, provider, apiKey, voice, model, autoSpeak, openaiBaseUrl] = await Promise.all([
+			settingsRegistry.get(T.ENABLED),
+			settingsRegistry.get(T.PROVIDER),
+			settingsRegistry.get(T.API_KEY),
+			settingsRegistry.get(T.VOICE),
+			settingsRegistry.get(T.MODEL),
+			settingsRegistry.get(T.AUTO_SPEAK),
+			settingsRegistry.get(T.BASE_URL)
 		]);
 
 		return {
-			enabled: result.tts_enabled || false,
-			provider: result.tts_provider || 'elevenlabs',  // Default to elevenlabs
-			apiKey: result.tts_apiKey || '',
-			voice: result.tts_voice || '',
-			model: result.tts_model || 'eleven_flash_v2_5',	// Default to 11labs fast model
-			autoSpeak: result.tts_autoSpeak || false,
-			openaiBaseUrl: result.openai_tts_base_url || ''
+			enabled,
+			provider,
+			apiKey,
+			voice,
+			model,
+			autoSpeak,
+			openaiBaseUrl
 		};
 	}
 
 	async function saveSettings(settings) {
-		await chrome.storage.local.set({
-			'tts_enabled': settings.enabled,
-			'tts_provider': settings.provider,  // NEW
-			'tts_apiKey': settings.apiKey,
-			'tts_voice': settings.voice,
-			'tts_model': settings.model,
-			'tts_autoSpeak': settings.autoSpeak,
-			'openai_tts_base_url': settings.openaiBaseUrl
-		});
+		await Promise.all([
+			settingsRegistry.set(T.ENABLED, settings.enabled),
+			settingsRegistry.set(T.PROVIDER, settings.provider),
+			settingsRegistry.set(T.API_KEY, settings.apiKey),
+			settingsRegistry.set(T.VOICE, settings.voice),
+			settingsRegistry.set(T.MODEL, settings.model),
+			settingsRegistry.set(T.AUTO_SPEAK, settings.autoSpeak),
+			settingsRegistry.set(T.BASE_URL, settings.openaiBaseUrl)
+		]);
 	}
 
 	function getConversationId() {

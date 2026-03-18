@@ -2,12 +2,13 @@
 (function () {
 	'use strict';
 
+	const _PCSTYLE = SETTINGS_KEYS.PERCHAT_STYLES.STYLES;
+
 	// Listen for messages from fetch interceptor
 	window.addEventListener('message', async (event) => {
 		if (event.data.type === 'perchat-style-request') {
 			const { conversationId, requestId } = event.data;
-			const result = await chrome.storage.local.get(`style_${conversationId}`);
-			const style = result[`style_${conversationId}`] || null;
+			const style = await settingsRegistry.getPerChat(_PCSTYLE, conversationId);
 
 			window.postMessage({
 				type: 'perchat-style-response',
@@ -19,11 +20,10 @@
 			const conversationId = getConversationId();
 
 			if (conversationId) {
-				const result = await chrome.storage.local.get(`style_${conversationId}`);
-				const currentStyle = result[`style_${conversationId}`];
+				const currentStyle = await settingsRegistry.getPerChat(_PCSTYLE, conversationId);
 
 				if (currentStyle && (currentStyle.uuid === deletedStyleId || currentStyle.key === deletedStyleId)) {
-					await chrome.storage.local.remove(`style_${conversationId}`);
+					await settingsRegistry.removePerChat(_PCSTYLE, conversationId);
 					await updateButtonAppearance();
 				}
 			}
@@ -114,8 +114,7 @@
 			const styles = await fetchAvailableStyles();
 
 			// Get current selection
-			const result = await chrome.storage.local.get(`style_${conversationId}`);
-			const currentStyle = result[`style_${conversationId}`] || null;
+			const currentStyle = await settingsRegistry.getPerChat(_PCSTYLE, conversationId);
 			const currentStyleId = currentStyle ? currentStyle.key : 'none';
 
 			// Destroy loading modal
@@ -147,11 +146,11 @@
 			modal.addConfirm('Apply', async () => {
 				const selectedUuid = select.value;
 				if (selectedUuid === 'none') {
-					await chrome.storage.local.remove(`style_${conversationId}`);
+					await settingsRegistry.removePerChat(_PCSTYLE, conversationId);
 				} else {
 					const selectedStyle = styles.find(s => s.key === selectedUuid);
 					if (selectedStyle && selectedStyle.type !== 'none') {
-						await chrome.storage.local.set({ [`style_${conversationId}`]: selectedStyle });
+						await settingsRegistry.setPerChat(_PCSTYLE, conversationId, selectedStyle);
 					}
 				}
 
@@ -174,8 +173,7 @@
 		const conversationId = getConversationId();
 		if (!conversationId) return;
 
-		const result = await chrome.storage.local.get(`style_${conversationId}`);
-		const currentStyle = result[`style_${conversationId}`] || null;
+		const currentStyle = await settingsRegistry.getPerChat(_PCSTYLE, conversationId);
 
 		// Validate that the stored style still exists
 		if (currentStyle && currentStyle.type !== 'none') {
@@ -184,7 +182,7 @@
 
 			if (!styleStillExists) {
 				console.log(`Style "${currentStyle.name}" no longer exists, clearing selection`);
-				await chrome.storage.local.remove(`style_${conversationId}`);
+				await settingsRegistry.removePerChat(_PCSTYLE, conversationId);
 				button.style.color = '';
 				button.tooltip?.updateText("Chat style: Use current");
 				return;
