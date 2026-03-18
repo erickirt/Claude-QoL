@@ -27,22 +27,9 @@
 	let currentState = 'idle'; // idle, recording, loading
 
 	// ======== SETTINGS MANAGEMENT ========
-	async function showSettingsModal() {
-		const storage = await chrome.storage.local.get([
-			'stt_provider',
-			'stt_api_key',
-			'stt_auto_send',
-			'stt_enabled',
-			'stt_audio_device',
-			'openai_stt_base_url'
-		]);
-		const selectedProvider = storage.stt_provider || (BrowserSTTProvider.isAvailable() ? 'browser' : 'groq');
-		const apiKey = storage.stt_api_key || '';
-		const autoSend = storage.stt_auto_send || false;
-		const sttEnabled = storage.stt_enabled || false;
-		const savedAudioDevice = storage.stt_audio_device || 'default';
-		const openaiBaseUrl = storage.openai_stt_base_url || '';
+	const S = SETTINGS_KEYS.STT;
 
+	async function showSettingsModal() {
 		// Get available audio devices - request permission if needed
 		let audioDevices = [];
 		try {
@@ -69,121 +56,49 @@
 
 		// Build device options
 		const deviceOptions = [{ value: 'default', label: 'Use default' }];
-
 		audioDevices.forEach(device => {
 			if (device.deviceId && device.deviceId !== 'default' && device.label) {
-				deviceOptions.push({
-					value: device.deviceId,
-					label: device.label
-				});
+				deviceOptions.push({ value: device.deviceId, label: device.label });
 			}
 		});
-
 		const needsPermission = deviceOptions.length === 1;
 
-		// Build modal content
-		const contentDiv = document.createElement('div');
-
-		// STT Enabled toggle
-		const sttEnabledContainer = document.createElement('div');
-		sttEnabledContainer.className = 'mb-4';
-		const sttEnabledToggle = createClaudeToggle('Enable Speech-to-Text', sttEnabled);
-		sttEnabledContainer.appendChild(sttEnabledToggle.container);
-		contentDiv.appendChild(sttEnabledContainer);
-
-		// Provider dropdown
-		const providerContainer = document.createElement('div');
-		providerContainer.className = 'mb-4';
-
-		const providerLabel = document.createElement('label');
-		providerLabel.className = CLAUDE_CLASSES.LABEL;
-		providerLabel.textContent = 'STT Provider';
-		providerContainer.appendChild(providerLabel);
+		// Build settings fields
+		const enabledField = new SettingsField(S.ENABLED, {
+			element: createClaudeToggle('Enable Speech-to-Text', false),
+		});
 
 		const providerOptions = Object.entries(STT_PROVIDERS)
-			.filter(([key, config]) => {
-				return config.class.isAvailable();
-			})
-			.map(([key, config]) => ({
-				value: key,
-				label: config.name
-			}));
-
-		const providerSelect = createClaudeSelect(providerOptions, selectedProvider);
-		providerContainer.appendChild(providerSelect);
-		contentDiv.appendChild(providerContainer);
-
-		// API Key input
-		const apiKeyContainer = document.createElement('div');
-		apiKeyContainer.className = 'mb-4';
-
-		const apiKeyLabel = document.createElement('label');
-		apiKeyLabel.className = CLAUDE_CLASSES.LABEL;
-		apiKeyLabel.textContent = 'API Key';
-		apiKeyContainer.appendChild(apiKeyLabel);
-
-		const apiKeyInput = createClaudeInput({
-			type: 'password',
-			placeholder: 'Enter API key...',
-			value: apiKey
+			.filter(([key, config]) => config.class.isAvailable())
+			.map(([key, config]) => ({ value: key, label: config.name }));
+		const providerField = new SettingsField(S.PROVIDER, {
+			label: 'STT Provider',
+			element: createClaudeSelect(providerOptions, 'browser'),
 		});
-		apiKeyInput.id = 'sttApiKey';
-		apiKeyContainer.appendChild(apiKeyInput);
-		contentDiv.appendChild(apiKeyContainer);
 
-		// Base URL input (for OpenAI-compatible APIs)
-		const baseUrlContainer = document.createElement('div');
-		baseUrlContainer.className = 'mb-4';
-
-		const baseUrlLabel = document.createElement('label');
-		baseUrlLabel.className = CLAUDE_CLASSES.LABEL;
-		baseUrlLabel.textContent = 'Base URL (optional)';
-		baseUrlContainer.appendChild(baseUrlLabel);
-
-		const baseUrlInput = createClaudeInput({
-			type: 'text',
-			placeholder: 'https://api.openai.com',
-			value: openaiBaseUrl
+		const apiKeyField = new SettingsField(S.API_KEY, {
+			label: 'API Key',
+			element: createClaudeInput({ type: 'password', placeholder: 'Enter API key...' }),
 		});
-		baseUrlInput.id = 'sttBaseUrl';
-		baseUrlContainer.appendChild(baseUrlInput);
 
-		const baseUrlHint = document.createElement('p');
-		baseUrlHint.className = 'text-text-500 text-xs mt-1';
-		baseUrlHint.textContent = 'For OpenAI-compatible APIs (LocalAI, vLLM, etc.)';
-		baseUrlContainer.appendChild(baseUrlHint);
+		const baseUrlField = new SettingsField(S.BASE_URL, {
+			label: 'Base URL (optional)',
+			element: createClaudeInput({ type: 'text', placeholder: 'https://api.openai.com' }),
+			hint: 'For OpenAI-compatible APIs (LocalAI, vLLM, etc.)',
+			transform: v => v.replace(/\/+$/, ''),  // Strip trailing slashes
+		});
 
-		contentDiv.appendChild(baseUrlContainer);
-
-		// Update API key and base URL field visibility based on provider
-		function updateFieldVisibility() {
-			const providerKey = providerSelect.value;
-			const provider = STT_PROVIDERS[providerKey];
-			apiKeyContainer.style.display = provider.requiresApiKey ? 'block' : 'none';
-			baseUrlContainer.style.display = providerKey === 'openai' ? 'block' : 'none';
-		}
-		updateFieldVisibility();
-
-		providerSelect.addEventListener('change', updateFieldVisibility);
-
-		// Audio Device dropdown
-		const audioDeviceContainer = document.createElement('div');
-		audioDeviceContainer.className = 'mb-4';
-
-		const audioDeviceLabel = document.createElement('label');
-		audioDeviceLabel.className = CLAUDE_CLASSES.LABEL;
-		audioDeviceLabel.textContent = 'Audio Input Device';
-		audioDeviceContainer.appendChild(audioDeviceLabel);
-
-		const audioDeviceSelect = createClaudeSelect(deviceOptions, savedAudioDevice);
-		audioDeviceContainer.appendChild(audioDeviceSelect);
+		const audioDeviceField = new SettingsField(S.AUDIO_DEVICE, {
+			label: 'Audio Input Device',
+			element: createClaudeSelect(deviceOptions, 'default'),
+		});
 
 		// Add permission message if needed
 		if (needsPermission) {
 			const permissionNote = document.createElement('div');
 			permissionNote.className = CLAUDE_CLASSES.TEXT_MUTED + ' mt-1';
 			permissionNote.textContent = 'Grant microphone permission to see available devices';
-			audioDeviceContainer.appendChild(permissionNote);
+			audioDeviceField.container.appendChild(permissionNote);
 
 			const requestPermButton = createClaudeButton(
 				'Request Microphone Access',
@@ -200,41 +115,49 @@
 				}
 			);
 			requestPermButton.className += ' mt-2';
-			audioDeviceContainer.appendChild(requestPermButton);
+			audioDeviceField.container.appendChild(requestPermButton);
 		}
 
-		contentDiv.appendChild(audioDeviceContainer);
+		const autoSendField = new SettingsField(S.AUTO_SEND, {
+			element: createClaudeToggle('Auto-send after transcription', false),
+		});
 
-		// Auto-send toggle
-		const autoSendContainer = document.createElement('div');
-		autoSendContainer.className = 'mb-4';
-		const autoSendToggle = createClaudeToggle('Auto-send after transcription', autoSend);
-		autoSendContainer.appendChild(autoSendToggle.container);
-		contentDiv.appendChild(autoSendContainer);
+		// Load all values from storage
+		const fields = [enabledField, providerField, apiKeyField, baseUrlField, audioDeviceField, autoSendField];
+		await Promise.all(fields.map(f => f.load()));
+
+		// Build modal content
+		const contentDiv = document.createElement('div');
+		fields.forEach(f => contentDiv.appendChild(f.container));
+
+		// Conditional field visibility based on provider
+		function updateFieldVisibility() {
+			const providerKey = providerField.value();
+			const provider = STT_PROVIDERS[providerKey];
+			apiKeyField.container.style.display = provider.requiresApiKey ? 'block' : 'none';
+			baseUrlField.container.style.display = providerKey === 'openai' ? 'block' : 'none';
+		}
+		updateFieldVisibility();
+		providerField.element.addEventListener('change', updateFieldVisibility);
 
 		// Create modal
 		const modal = new ClaudeModal('STT Settings', contentDiv);
 		modal.addCancel('Cancel');
 		modal.addConfirm('Save', async (btn, modal) => {
-			const newProvider = providerSelect.value;
-			const newKey = apiKeyInput.value.trim();
-			const newAutoSend = autoSendToggle.input.checked;
-			const newEnabled = sttEnabledToggle.input.checked;
-			const newAudioDevice = audioDeviceSelect.value;
-			const newBaseUrl = baseUrlInput.value.trim().replace(/\/+$/, '');  // Strip trailing slashes
-
-			const provider = STT_PROVIDERS[newProvider];
+			const provider = STT_PROVIDERS[providerField.value()];
 
 			// Validate API key if provider requires it
-			if (provider.requiresApiKey && newKey) {
-				// Show loading modal
+			if (provider.requiresApiKey && !apiKeyField.value()) {
+				showClaudeAlert('API Key Required', 'Please enter an API key for this provider.');
+				return false;
+			}
+			if (provider.requiresApiKey && apiKeyField.value()) {
 				const loadingModal = createLoadingModal('Validating API key...');
 				loadingModal.show();
 
-				// Pass baseUrl for OpenAI provider
-				const isValid = newProvider === 'openai'
-					? await provider.class.validateApiKey(newKey, newBaseUrl)
-					: await provider.class.validateApiKey(newKey);
+				const isValid = providerField.value() === 'openai'
+					? await provider.class.validateApiKey(apiKeyField.value(), baseUrlField.value())
+					: await provider.class.validateApiKey(apiKeyField.value());
 
 				if (!isValid) {
 					loadingModal.destroy();
@@ -245,15 +168,7 @@
 				loadingModal.destroy();
 			}
 
-			await chrome.storage.local.set({
-				stt_provider: newProvider,
-				stt_api_key: newKey,
-				stt_auto_send: newAutoSend,
-				stt_enabled: newEnabled,
-				stt_audio_device: newAudioDevice,
-				openai_stt_base_url: newBaseUrl
-			});
-
+			await Promise.all(fields.map(f => f.save()));
 			return true; // Close modal
 		});
 
@@ -263,11 +178,12 @@
 	// ======== RECORDING FUNCTIONS ========
 	async function startRecording() {
 		try {
-			const storage = await chrome.storage.local.get(['stt_provider', 'stt_api_key', 'stt_audio_device', 'openai_stt_base_url']);
-			const providerKey = storage.stt_provider || (BrowserSTTProvider.isAvailable() ? 'browser' : 'groq');
-			const apiKey = storage.stt_api_key || '';
-			const audioDevice = storage.stt_audio_device || 'default';
-			const openaiBaseUrl = storage.openai_stt_base_url || '';
+			const [providerKey, apiKey, audioDevice, openaiBaseUrl] = await Promise.all([
+				settingsRegistry.get(S.PROVIDER),
+				settingsRegistry.get(S.API_KEY),
+				settingsRegistry.get(S.AUDIO_DEVICE),
+				settingsRegistry.get(S.BASE_URL),
+			]);
 
 			const providerConfig = STT_PROVIDERS[providerKey];
 
@@ -308,8 +224,7 @@
 
 			const transcription = await sttProvider.stopRecording();
 
-			const storage = await chrome.storage.local.get('stt_auto_send');
-			const autoSend = storage.stt_auto_send || false;
+			const autoSend = await settingsRegistry.get(S.AUTO_SEND);
 			insertTextAndSend(transcription, autoSend);
 
 			sttProvider = null;
@@ -440,8 +355,7 @@
 
 	// ======== BUTTON INSERTION ========
 	async function tryAddMicButton() {
-		const storage = await chrome.storage.local.get('stt_enabled');
-		const enabled = storage.stt_enabled || false;
+		const enabled = await settingsRegistry.get(S.ENABLED);
 
 		if (!enabled) {
 			const existing = document.querySelector('.stt-mic-container');
