@@ -43,8 +43,16 @@
 		let editButtonWrapper = null;
 
 		for (const btn of allButtons) {
+			const ariaLabel = btn.getAttribute('aria-label');
+			if (ariaLabel === 'Edit') {
+				editButton = btn;
+				editButtonWrapper = btn.closest('div.w-fit');
+				break;
+			}
+
+			// Also check for the path as a fallback
 			const svgPath = btn.querySelector('svg path');
-			if (svgPath && svgPath.getAttribute('d')?.startsWith('M9.72821 2.87934')) {
+			if (svgPath && svgPath.getAttribute('d')?.startsWith('M9.728 2.88a1.5')) {
 				editButton = btn;
 				editButtonWrapper = btn.closest('div.w-fit');
 				break;
