@@ -1,7 +1,7 @@
 {
 	"manifest_version": 3,
 	"name": "Claude QoL - Export, Fork, Search, and more",
-	"version": "2.5.3",
+	"version": "2.5.5",
 	"description": "Collection of claude.ai enhancements: Exporting/Importing chats, Forking, Text Search, Bookmarks, TTS, STT, and more.",
 	"permissions": [
 		"storage"
@@ -37,7 +37,8 @@
 				"content/isolated/perchat-styles.js",
 				"content/isolated/tts.js",
 				"content/isolated/exporter.js",
-				"content/isolated/notifications.js"
+				"content/isolated/notifications.js",
+				"content/isolated/image-extractor.js"
 			],
 			"run_at": "document_idle"
 		},
@@ -58,8 +59,7 @@
 				"content/main/file-download.js",
 				"content/main/pref-switcher-fetch-watcher.js",
 				"content/main/styles-fetch-interceptor.js",
-				"content/main/tts-interceptor.js",
-				"content/main/image-extractor.js"
+				"content/main/tts-interceptor.js"
 			],
 			"world": "MAIN",
 			"run_at": "document_start"

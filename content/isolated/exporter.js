@@ -1558,10 +1558,11 @@
 			const exportContainer = document.createElement('div');
 			exportContainer.className = 'mb-4 flex gap-2';
 
-			// Format select (TXT is internal only, used inside HTML for raw data - not offered as standalone option)
+			// Format select
 			formatSelect = createClaudeSelect([
 				{ value: 'html_html', label: 'HTML (.html)' },
 				{ value: 'zip_zip', label: 'Zip (.zip)' },
+				{ value: 'txt_txt', label: 'Text (.txt)' },
 				{ value: 'md_md', label: 'Markdown (.md)' },
 				{ value: 'jsonl_jsonl', label: 'JSONL (.jsonl)' },
 				{ value: 'librechat_json', label: 'Librechat (.json)' },

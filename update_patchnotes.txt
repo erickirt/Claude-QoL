@@ -1,4 +1,2 @@
-Support tool-created files for exports
-Added a helper scripts that shows tool-generated images inline
-UI bugfixes
-Improved desktop client compatibility
+Fixed a bug that was preventing the viewing of some conversations
+Made the "inline image display" toggleable and behave differently

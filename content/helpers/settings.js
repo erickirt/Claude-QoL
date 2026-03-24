@@ -39,6 +39,9 @@ const SETTINGS_KEYS = {
 	NAVIGATION: {
 		BOOKMARKS: { key: 'navigation_bookmarks', default: {}, type: 'object' },
 	},
+	IMAGE_EXTRACTOR: {
+		AUTO_EXPAND: { key: 'image_auto_expand', default: false, type: 'boolean' },
+	},
 	NOTIFICATIONS: {
 		PREVIOUS_VERSION: { key: 'qolPreviousVersion', default: null, type: 'string' },
 	},
