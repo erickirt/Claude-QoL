@@ -182,7 +182,7 @@ function injectPhantomMessages(data, phantomMessages) {
 	const timestamp = new Date().toISOString();
 	const referenceMsg = data.chat_messages[0];
 
-	// Add phantom marker to each message's content
+	// Add phantom marker as a separate content item for each message
 	for (const msg of phantomMessages) {
 		if (!msg.created_at) msg.created_at = timestamp;
 		if (!msg.updated_at) msg.updated_at = timestamp;
@@ -191,10 +191,15 @@ function injectPhantomMessages(data, phantomMessages) {
 			if (!item.start_timestamp) item.start_timestamp = timestamp;
 			if (!item.stop_timestamp) item.stop_timestamp = timestamp;
 			if (!item.citations) item.citations = [];
-			if (item.text !== undefined) {
-				item.text = item.text + '\n\n' + PHANTOM_MARKER;
-			}
 		}
+
+		msg.content.push({
+			start_timestamp: timestamp,
+			stop_timestamp: timestamp,
+			type: "text",
+			text: PHANTOM_MARKER,
+			citations: []
+		});
 	}
 
 	// If last phantom is human, add an ack message
@@ -208,13 +213,22 @@ function injectPhantomMessages(data, phantomMessages) {
 		ackMessage.sender = 'assistant';
 		ackMessage.created_at = timestamp;
 		ackMessage.updated_at = timestamp;
-		ackMessage.content = [{
-			start_timestamp: timestamp,
-			stop_timestamp: timestamp,
-			type: "text",
-			text: "Acknowledged - end of previous conversation.\n\n" + PHANTOM_MARKER,
-			citations: []
-		}];
+		ackMessage.content = [
+			{
+				start_timestamp: timestamp,
+				stop_timestamp: timestamp,
+				type: "text",
+				text: "Acknowledged - end of previous conversation.",
+				citations: []
+			},
+			{
+				start_timestamp: timestamp,
+				stop_timestamp: timestamp,
+				type: "text",
+				text: PHANTOM_MARKER,
+				citations: []
+			}
+		];
 		phantomMessages.push(ackMessage);
 		lastPhantom = ackMessage;
 	}
@@ -253,21 +267,11 @@ function injectUUIDMarkers(data) {
 	const assistantMessages = data.chat_messages.filter(msg => msg.sender !== 'human');
 
 	assistantMessages.forEach(msg => {
-
-		// Find the LAST text item instead of first
-		let lastTextIndex = -1;
-		for (let i = msg.content.length - 1; i >= 0; i--) {
-			if (msg.content[i].text !== undefined) {
-				lastTextIndex = i;
-				break;
-			}
-		}
-
-		if (lastTextIndex !== -1) {
-			const item = msg.content[lastTextIndex];
-			const uuidMarker = UUID_MARKER_PREFIX + msg.uuid + UUID_MARKER_SUFFIX;
-			item.text = item.text + '\n\n' + uuidMarker;
-		}
+		const uuidMarker = UUID_MARKER_PREFIX + msg.uuid + UUID_MARKER_SUFFIX;
+		msg.content.push({
+			type: "text",
+			text: uuidMarker
+		});
 	});
 }
 
@@ -301,15 +305,12 @@ function stylePhantomMessages() {
 }
 
 function removePhantomMarkerFromElement(element) {
+	// Markers are now separate content items rendered as their own <p> elements.
+	// Just hide them — no textContent modification needed, avoids React DOM desync.
 	const paragraphs = element.querySelectorAll('p');
-
 	paragraphs.forEach(p => {
 		if (p.textContent.includes(PHANTOM_MARKER)) {
-			p.textContent = p.textContent.replace(PHANTOM_MARKER, '');
-
-			if (p.textContent.trim() === '') {
-				p.style.display = 'none';
-			}
+			p.style.display = 'none';
 		}
 	});
 }
@@ -343,26 +344,12 @@ function extractAndStoreUUIDs() {
 }
 
 function removeUUIDMarkerFromElement(element) {
+	// Markers are now separate content items rendered as their own <p> elements.
+	// Just hide them — no textContent modification needed, avoids React DOM desync.
 	const paragraphs = element.querySelectorAll('p');
-
-	paragraphs.forEach((p, index) => {
-		const text = p.textContent;
-		if (text.includes(UUID_MARKER_PREFIX)) {
-			// Use lastIndexOf to get the LAST occurrence (the actual injected marker)
-			const markerStart = text.lastIndexOf(UUID_MARKER_PREFIX);
-			// Search for suffix AFTER the prefix
-			const searchFrom = markerStart + UUID_MARKER_PREFIX.length;
-			const markerEnd = text.indexOf(UUID_MARKER_SUFFIX, searchFrom);
-
-			if (markerEnd !== -1) {
-				const beforeMarker = text.substring(0, markerStart);
-				const afterMarker = text.substring(markerEnd + UUID_MARKER_SUFFIX.length);
-				const newText = beforeMarker + afterMarker;
-				p.textContent = newText;
-				if (p.textContent.trim() === '') {
-					p.style.display = 'none';
-				}
-			}
+	paragraphs.forEach(p => {
+		if (p.textContent.includes(UUID_MARKER_PREFIX)) {
+			p.style.display = 'none';
 		}
 	});
 }
