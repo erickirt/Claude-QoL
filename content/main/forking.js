@@ -58,123 +58,228 @@ If this is a writing or creative discussion, include sections for characters, pl
 	}
 
 	async function createConfigModal(messageUuid) {
+		// Pre-fetch messages for token estimation (fire-and-forget)
+		const conversationId = getConversationId();
+		const orgId = getOrgId();
+		let fetchedMessages = null;
+		let totalTokens = null;
+
+		getConversationMessages(orgId, conversationId, messageUuid)
+			.then(result => {
+				fetchedMessages = result.messages;
+				totalTokens = estimateTokens(fetchedMessages);
+				percentInput.disabled = false;
+				updateDisplay();
+			})
+			.catch(err => {
+				console.error('Failed to pre-fetch messages for token estimate:', err);
+				tokenLabel.textContent = '(unavailable)';
+			});
+
+		// === Two-panel layout ===
 		const content = document.createElement('div');
+		content.className = 'flex gap-4';
+
+		// --- LEFT PANEL ---
+		const leftPanel = document.createElement('div');
+		leftPanel.className = 'flex-1 min-w-0';
 
 		// Model select
 		const selectOptions = CLAUDE_MODELS;
 		const modelSelect = createClaudeSelect(selectOptions, selectOptions[0].value);
 		modelSelect.classList.add('mb-4');
-		content.appendChild(modelSelect);
+		leftPanel.appendChild(modelSelect);
 
-		// Raw text slider section
+		// Slider section
 		const rawTextContainer = document.createElement('div');
 		rawTextContainer.className = 'mb-4 space-y-2 border border-border-300 rounded p-3';
-
-		const rawTextSlider = createClaudeSlider('Preserve X% of recent messages verbatim:', 25, {
+		const rawTextSlider = createClaudeSlider('Preserve X% of recent messages verbatim:', 20, {
+			step: 10,
 			leftLabel: 'Summarize all',
 			rightLabel: 'Summarize none'
 		});
 		rawTextSlider.input.id = 'rawTextPercentage';
 		rawTextContainer.appendChild(rawTextSlider.container);
+		leftPanel.appendChild(rawTextContainer);
 
-		// Summary prompt input (initially hidden)
-		const summaryPromptContainer = document.createElement('div');
-		summaryPromptContainer.id = 'summaryPromptContainer';
-		summaryPromptContainer.style.display = rawTextSlider.input.value < 100 ? 'block' : 'none';
-		summaryPromptContainer.className = 'mt-2';
+		// File toggle + sub-toggle
+		const includeFilesContainer = document.createElement('div');
+		includeFilesContainer.className = 'mb-4';
+		const includeFilesToggle = createClaudeToggle('Forward files', true);
+		includeFilesToggle.input.id = 'includeFiles';
+		includeFilesContainer.appendChild(includeFilesToggle.container);
+		const keepFilesFromSummarizedToggle = createClaudeToggle('Forward files from summarized section', false);
+		keepFilesFromSummarizedToggle.container.classList.add('pl-4');
+		keepFilesFromSummarizedToggle.container.style.transition = 'opacity 0.2s';
+		keepFilesFromSummarizedToggle.input.id = 'keepFilesFromSummarized';
+		includeFilesContainer.appendChild(keepFilesFromSummarizedToggle.container);
+		leftPanel.appendChild(includeFilesContainer);
 
+		// Tool calls toggle + sub-toggle
+		const includeToolCallsContainer = document.createElement('div');
+		includeToolCallsContainer.className = 'mb-4';
+		const includeToolCallsToggle = createClaudeToggle('Forward tool calls', false);
+		includeToolCallsToggle.input.id = 'includeToolCalls';
+		includeToolCallsContainer.appendChild(includeToolCallsToggle.container);
+		const keepToolCallsFromSummarizedToggle = createClaudeToggle('Forward tool calls from summarized section', false);
+		keepToolCallsFromSummarizedToggle.container.classList.add('pl-4');
+		keepToolCallsFromSummarizedToggle.container.style.transition = 'opacity 0.2s';
+		keepToolCallsFromSummarizedToggle.input.id = 'keepToolCallsFromSummarized';
+		includeToolCallsContainer.appendChild(keepToolCallsFromSummarizedToggle.container);
+		leftPanel.appendChild(includeToolCallsContainer);
+
+		// Use above model for summarization toggle
+		const useSelectedModelToggle = createClaudeToggle('Use above model for summarization instead of Haiku', false);
+		useSelectedModelToggle.input.id = 'useSelectedModelForSummary';
+		useSelectedModelToggle.container.style.transition = 'opacity 0.2s';
+		leftPanel.appendChild(useSelectedModelToggle.container);
+
+		content.appendChild(leftPanel);
+
+		// --- RIGHT PANEL (Summary Details) ---
+		const rightPanel = document.createElement('div');
+		rightPanel.className = 'flex-1 min-w-0 pl-4 border-l border-border-300 space-y-3';
+		rightPanel.style.transition = 'opacity 0.2s';
+
+		// % input + token estimate
+		const tokenRow = document.createElement('div');
+		tokenRow.className = 'flex items-center gap-2 flex-wrap';
+
+		const percentInput = document.createElement('input');
+		percentInput.type = 'number';
+		percentInput.min = 0;
+		percentInput.max = 100;
+		percentInput.value = 20;
+		percentInput.className = CLAUDE_CLASSES.INPUT;
+		percentInput.style.width = '4.5rem';
+		percentInput.style.textAlign = 'center';
+		percentInput.disabled = true;
+
+		const percentSymbol = document.createElement('span');
+		percentSymbol.className = 'text-sm text-text-300';
+		percentSymbol.textContent = '%';
+
+		const tokenLabel = document.createElement('span');
+		tokenLabel.className = 'text-sm text-text-400';
+		tokenLabel.textContent = 'Calculating...';
+
+		tokenRow.appendChild(percentInput);
+		tokenRow.appendChild(percentSymbol);
+		tokenRow.appendChild(tokenLabel);
+		rightPanel.appendChild(tokenRow);
+
+		// Message preview
+		const previewContainer = document.createElement('div');
+		previewContainer.className = 'text-sm text-text-400 italic';
+		previewContainer.style.height = '3.5rem';
+		previewContainer.style.overflow = 'hidden';
+		rightPanel.appendChild(previewContainer);
+
+		// Summary prompt
 		const promptLabel = document.createElement('label');
 		promptLabel.className = CLAUDE_CLASSES.LABEL;
 		promptLabel.textContent = 'Summary Prompt:';
-		summaryPromptContainer.appendChild(promptLabel);
+		rightPanel.appendChild(promptLabel);
 
 		const promptInput = document.createElement('textarea');
 		promptInput.className = CLAUDE_CLASSES.INPUT;
 		promptInput.placeholder = 'Enter custom summary prompt...';
 		promptInput.value = defaultSummaryPrompt;
-		promptInput.rows = 10;
+		promptInput.rows = 8;
 		promptInput.style.resize = 'vertical';
 		promptInput.id = 'summaryPrompt';
-		summaryPromptContainer.appendChild(promptInput);
+		rightPanel.appendChild(promptInput);
 
-		rawTextContainer.appendChild(summaryPromptContainer);
+		content.appendChild(rightPanel);
 
-		// Use selected model for summarization toggle
-		const useSelectedModelContainer = document.createElement('div');
-		useSelectedModelContainer.id = 'useSelectedModelContainer';
-		useSelectedModelContainer.style.display = rawTextSlider.input.value < 100 ? 'block' : 'none';
-		useSelectedModelContainer.className = 'mt-2';
-		const useSelectedModelToggle = createClaudeToggle('Use above model for summarization instead of Haiku', false);
-		useSelectedModelToggle.input.id = 'useSelectedModelForSummary';
-		useSelectedModelContainer.appendChild(useSelectedModelToggle.container);
-		rawTextContainer.appendChild(useSelectedModelContainer);
+		// === Sync & Display Logic ===
+		let isSyncing = false;
 
-		content.appendChild(rawTextContainer);
-
-		// Include files toggle
-		const includeFilesContainer = document.createElement('div');
-		includeFilesContainer.className = 'mb-4';
-		includeFilesContainer.id = 'includeFilesContainer';
-		const includeFilesToggle = createClaudeToggle('Forward files', true);
-		includeFilesToggle.input.id = 'includeFiles';
-		includeFilesContainer.appendChild(includeFilesToggle.container);
-
-
-		const keepFilesFromSummarizedToggle = createClaudeToggle('Forward files from summarized section', false);
-		keepFilesFromSummarizedToggle.container.classList.add('pl-4');
-		keepFilesFromSummarizedToggle.container.style.display = 'none';
-		keepFilesFromSummarizedToggle.input.id = 'keepFilesFromSummarized';
-		includeFilesContainer.appendChild(keepFilesFromSummarizedToggle.container);
-		content.appendChild(includeFilesContainer);
-
-
-		const includeToolCallsContainer = document.createElement('div');
-		includeToolCallsContainer.className = 'mb-4';
-		includeToolCallsContainer.id = 'includeToolCallsContainer';
-		const includeToolCallsToggle = createClaudeToggle('Forward tool calls', false); // Default OFF
-		includeToolCallsToggle.input.id = 'includeToolCalls';
-		includeToolCallsContainer.appendChild(includeToolCallsToggle.container);
-
-		const keepToolCallsFromSummarizedToggle = createClaudeToggle('Forward tool calls from summarized section', false);
-		keepToolCallsFromSummarizedToggle.container.classList.add('pl-4');
-		keepToolCallsFromSummarizedToggle.container.style.display = 'none';
-		keepToolCallsFromSummarizedToggle.input.id = 'keepToolCallsFromSummarized';
-		includeToolCallsContainer.appendChild(keepToolCallsFromSummarizedToggle.container);
-		content.appendChild(includeToolCallsContainer);
-
-		// Show/hide sub-toggles based on conditions
-		function updateSubToggleVisibility() {
-			const isSummarizing = rawTextSlider.input.value < 100;
-			summaryPromptContainer.style.display = isSummarizing ? 'block' : 'none';
-			useSelectedModelContainer.style.display = isSummarizing ? 'block' : 'none';
-
-			keepFilesFromSummarizedToggle.container.style.display =
-				(includeFilesToggle.input.checked && isSummarizing) ? 'flex' : 'none';
-
-			keepToolCallsFromSummarizedToggle.container.style.display =
-				(includeToolCallsToggle.input.checked && isSummarizing) ? 'flex' : 'none';
+		function getCurrentPercent() {
+			const val = parseInt(percentInput.value);
+			if (isNaN(val)) return 0;
+			return Math.max(0, Math.min(100, val));
 		}
 
-		// Attach listeners
-		rawTextSlider.input.addEventListener('change', updateSubToggleVisibility);
-		includeFilesToggle.input.addEventListener('change', updateSubToggleVisibility);
-		includeToolCallsToggle.input.addEventListener('change', updateSubToggleVisibility);
+		function updateDisplay() {
+			const pct = getCurrentPercent();
+			const isSummarizing = pct < 100;
+
+			// Right panel graying
+			rightPanel.style.opacity = isSummarizing ? '1' : '0.4';
+			rightPanel.style.pointerEvents = isSummarizing ? 'auto' : 'none';
+
+			// Sub-toggles in left panel - gray out instead of hiding
+			const filesSubEnabled = includeFilesToggle.input.checked && isSummarizing;
+			keepFilesFromSummarizedToggle.container.style.opacity = filesSubEnabled ? '1' : '0.4';
+			keepFilesFromSummarizedToggle.container.style.pointerEvents = filesSubEnabled ? 'auto' : 'none';
+
+			const toolsSubEnabled = includeToolCallsToggle.input.checked && isSummarizing;
+			keepToolCallsFromSummarizedToggle.container.style.opacity = toolsSubEnabled ? '1' : '0.4';
+			keepToolCallsFromSummarizedToggle.container.style.pointerEvents = toolsSubEnabled ? 'auto' : 'none';
+
+			useSelectedModelToggle.container.style.opacity = isSummarizing ? '1' : '0.4';
+			useSelectedModelToggle.container.style.pointerEvents = isSummarizing ? 'auto' : 'none';
+
+			// Token & preview (only when data available)
+			if (totalTokens === null || !fetchedMessages) return;
+
+			const keepTokens = Math.ceil(totalTokens * pct / 100);
+			tokenLabel.textContent = `~${keepTokens.toLocaleString()} verbatim / ~${totalTokens.toLocaleString()} total tokens`;
+
+			if (pct >= 100) {
+				previewContainer.textContent = '';
+			} else if (pct === 0) {
+				previewContainer.textContent = 'All messages will be summarized';
+			} else {
+				const splitIdx = calculateSplitIndex(fetchedMessages, pct);
+				if (splitIdx === 0 || splitIdx >= fetchedMessages.length) {
+					previewContainer.textContent = '';
+				} else {
+					const firstKept = fetchedMessages[splitIdx];
+					const text = ClaudeConversation.extractMessageText(firstKept);
+					const truncated = text.length > 100 ? text.substring(0, 100) + '...' : text;
+					previewContainer.textContent = `Verbatim starts from: "${truncated}" (msg ${splitIdx + 1} of ${fetchedMessages.length})`;
+				}
+			}
+		}
+
+		function syncFromSlider() {
+			if (isSyncing) return;
+			isSyncing = true;
+			percentInput.value = rawTextSlider.input.value;
+			updateDisplay();
+			isSyncing = false;
+		}
+
+		function syncFromPercent() {
+			if (isSyncing) return;
+			isSyncing = true;
+			rawTextSlider.setValue(getCurrentPercent());
+			updateDisplay();
+			isSyncing = false;
+		}
+
+		rawTextSlider.input.addEventListener('change', syncFromSlider);
+		rawTextSlider.input.addEventListener('input', syncFromSlider);
+		percentInput.addEventListener('input', syncFromPercent);
+		includeFilesToggle.input.addEventListener('change', updateDisplay);
+		includeToolCallsToggle.input.addEventListener('change', updateDisplay);
 
 		// Initial state
-		updateSubToggleVisibility();
-
+		updateDisplay();
 
 		// Create modal
 		const modal = new ClaudeModal('Choose Model for Fork', content);
-
-		// Wider modal
 		modal.modal.classList.remove('max-w-md');
-		modal.modal.classList.add('max-w-lg');
+		modal.modal.classList.add('max-w-3xl');
 
 		modal.addCancel();
 		modal.addConfirm('Fork Chat', async () => {
 			pendingFork.model = modelSelect.value;
-			pendingFork.rawTextPercentage = parseInt(rawTextSlider.input.value);
+			pendingFork.rawTextPercentage = totalTokens !== null
+				? getCurrentPercent()
+				: parseInt(rawTextSlider.input.value);
 			pendingFork.summaryPrompt = promptInput.value;
 			pendingFork.includeAttachments = includeFilesToggle.input.checked;
 			pendingFork.includeToolCalls = includeToolCallsToggle.input.checked;
@@ -183,8 +288,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 			pendingFork.useSelectedModelForSummary = useSelectedModelToggle.input.checked;
 
 			modal.destroy();
-			await forkConversationClicked(messageUuid); // Pass UUID directly
-
+			await forkConversationClicked(messageUuid);
 			return false;
 		});
 
@@ -237,20 +341,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 				console.log('Messages after normalization:', messages);
 
 				// NOW token-based splitting works at the right granularity
-				const totalTokens = estimateTokens(messages);
-				const targetKeepTokens = Math.ceil(totalTokens * pendingFork.rawTextPercentage / 100);
-
-				let keepCount = takeMessagesFromEnd(messages, targetKeepTokens, true);
-				let splitIndex = messages.length - keepCount;
-
-				// Adjust to ensure we cut before a user message
-				while (splitIndex < messages.length && messages[splitIndex].sender !== 'human') {
-					splitIndex++;
-				}
-
-				if (splitIndex >= messages.length) {
-					splitIndex = 0;
-				}
+				const splitIndex = calculateSplitIndex(messages, pendingFork.rawTextPercentage);
 
 				const toSummarize = messages.slice(0, splitIndex);
 				let toKeep = messages.slice(splitIndex);
@@ -594,6 +685,25 @@ If this is a writing or creative discussion, include sections for characters, pl
 	function takeMessagesFromEnd(messages, maxTokens, greedy = true) {
 		const reversed = messages.slice().reverse();
 		return takeMessagesUpToTokens(reversed, maxTokens, greedy);
+	}
+
+	function calculateSplitIndex(messages, rawTextPercentage) {
+		const totalTokens = estimateTokens(messages);
+		const targetKeepTokens = Math.ceil(totalTokens * rawTextPercentage / 100);
+
+		let keepCount = takeMessagesFromEnd(messages, targetKeepTokens, true);
+		let splitIndex = messages.length - keepCount;
+
+		// Adjust to ensure we cut before a user message
+		while (splitIndex < messages.length && messages[splitIndex].sender !== 'human') {
+			splitIndex++;
+		}
+
+		if (splitIndex >= messages.length) {
+			splitIndex = 0;
+		}
+
+		return splitIndex;
 	}
 
 	async function generateSummaryForChunk(tempConversation, messages, priorSummaryTexts) {
