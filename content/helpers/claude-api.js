@@ -765,7 +765,23 @@ class ClaudeFile {
 	}
 
 	static async upload(orgId, blob, fileName) {
-		const mimeType = mime.getType(fileName) || 'application/octet-stream';
+		const filenameMime = mime.getType(fileName) || 'application/octet-stream';
+		const blobMime = blob.type && blob.type !== 'application/octet-stream' ? blob.type : null;
+
+		// Prefer blob's actual MIME when it conflicts with filename-derived MIME.
+		// This handles project knowledge search results where rendered PDF page
+		// images (image/*) retain the original .pdf filename.
+		let mimeType = filenameMime;
+		if (blobMime && blobMime !== filenameMime) {
+			const blobIsImage = blobMime.startsWith('image/');
+			const filenameIsPdf = filenameMime === 'application/pdf';
+			if (blobIsImage && filenameIsPdf) {
+				console.warn(`[ClaudeFile] MIME mismatch for "${fileName}": blob is ${blobMime} but filename suggests ${filenameMime}. Using blob MIME.`);
+				mimeType = blobMime;
+				const ext = blobMime.split('/')[1]?.replace('jpeg', 'jpg') || 'png';
+				fileName = fileName.replace(/\.[^.]+$/, `.${ext}`);
+			}
+		}
 		const typedBlob = new Blob([blob], { type: mimeType });
 
 		// Direct upload for images and PDFs, conversion for other documents

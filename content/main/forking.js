@@ -754,9 +754,13 @@ If this is a writing or creative discussion, include sections for characters, pl
 		const chatlogAtt = ClaudeConversation.buildChatlog(messages, { includeRoleLabels: true });
 		await summaryMessage.addFile(chatlogAtt.text, chatlogAtt.filename, true);
 
-		// Re-upload files using addFile()
+		// Re-upload files using addFile() (skip failures gracefully)
 		for (const f of files) {
-			await summaryMessage.addFile(f);
+			try {
+				await summaryMessage.addFile(f);
+			} catch (error) {
+				console.warn(`Skipping file ${f.file_name} during summarization: ${error.message}`);
+			}
 		}
 
 		// Get summary using the passed conversation
@@ -1279,9 +1283,13 @@ Provide the complete rewritten summary.`;
 					const chatlogAtt = ClaudeConversation.buildChatlog(chunk, { includeRoleLabels: true });
 					await rewriteMessage.addFile(chatlogAtt.text, chatlogAtt.filename, true);
 
-					// Re-upload files using addFile()
+					// Re-upload files using addFile() (skip failures gracefully)
 					for (const f of files) {
-						await rewriteMessage.addFile(f);
+						try {
+							await rewriteMessage.addFile(f);
+						} catch (error) {
+							console.warn(`Skipping file ${f.file_name} during rewrite: ${error.message}`);
+						}
 					}
 
 					const assistantMessage = await tempConversation.sendMessageAndWaitForResponse(rewriteMessage);
