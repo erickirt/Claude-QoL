@@ -1,3 +1,4 @@
-Fixed a bug that was preventing the viewing of some conversations
-Clean up markers better
-Made the "inline image display" use the built-in image gallery
+Rework forking for better control
+Make forking much more reliable
+Fix navigation/search
+Fix MIME type bug (@rqhu1995)

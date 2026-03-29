@@ -99,6 +99,26 @@ async function clearPhantomMessages(conversationId) {
 	await _bridgeRequest('PHANTOM_CLEAR', { conversationId }, 'PHANTOM_CLEARED');
 }
 
+async function bustReactQueryCache() {
+	return new Promise((resolve) => {
+		const request = indexedDB.open('keyval-store');
+		request.onsuccess = (event) => {
+			const db = event.target.result;
+			const tx = db.transaction('keyval', 'readwrite');
+			tx.objectStore('keyval').delete('react-query-cache');
+			tx.oncomplete = () => {
+				db.close();
+				resolve();
+			};
+			tx.onerror = () => {
+				db.close();
+				resolve();
+			};
+		};
+		request.onerror = () => resolve();
+	});
+}
+
 // Shared streaming freshness check.
 // Fetches apiUrl, reads first ~8KB to find updated_at, compares with cachedEntry.
 // Returns { data, fromCache } on success, null on failure.
@@ -481,6 +501,10 @@ class ClaudeConversation {
 		if (!response.ok) {
 			throw new Error('Failed to set current leaf');
 		}
+
+		// Bust the react-query cache before reloading
+		await bustReactQueryCache();
+		location.reload();
 	}
 
 	// Delete conversation
