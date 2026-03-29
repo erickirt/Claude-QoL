@@ -241,18 +241,36 @@ class ClaudeConversation {
 			throw new Error('Failed to send message');
 		}
 
-		// Just consume the stream until it's done
+		// Consume the stream, extracting the response UUID from the message_start event
 		const reader = response.body.getReader();
 		const decoder = new TextDecoder();
+		let responseUuid = null;
 
 		try {
 			while (true) {
 				const { done, value } = await reader.read();
-
 				if (done) break;
 
-				// Decode and check for completion signal
 				const chunk = decoder.decode(value, { stream: true });
+				console.log('Received chunk:', chunk);
+
+				// Extract response UUID from the message_start event
+				if (!responseUuid && chunk.includes('"type":"message_start"')) {
+					const lines = chunk.split('\n');
+					for (const line of lines) {
+						const trimmed = line.trim();
+						if (trimmed.startsWith('data: ') && trimmed.includes('"message_start"')) {
+							try {
+								const parsed = JSON.parse(trimmed.substring(6));
+								responseUuid = parsed.message?.uuid;
+								console.log('Got response UUID from message_start:', responseUuid);
+							} catch (e) {
+								console.warn('Failed to parse message_start data:', e);
+							}
+							break;
+						}
+					}
+				}
 
 				if (chunk.includes('event: message_stop')) {
 					break;
@@ -262,29 +280,32 @@ class ClaudeConversation {
 			reader.releaseLock();
 		}
 
-		// Find assistant message created AFTER our request
-		// getMessages() now returns ClaudeMessage[], so use .createdAt property
+		// Find the assistant response by UUID (or fall back to timestamp)
 		let assistantMessage;
 		let attempts = 0;
 		let messages;
-		const maxAttempts = 60;
+		const maxAttempts = 30;
 
 		while (!assistantMessage && attempts < maxAttempts) {
 			if (attempts > 0) {
-				console.log(`Assistant message not found or too old, waiting 3 seconds and retrying (attempt ${attempts}/${maxAttempts})...`);
+				console.log(`Assistant message not found, waiting 3 seconds and retrying (attempt ${attempts}/${maxAttempts})...`);
 				await new Promise(r => setTimeout(r, 3000));
 			}
 			messages = await this.getMessages(false, true);
-			assistantMessage = messages.find(msg =>
-				msg.sender === 'assistant' &&
-				msg.created_at > requestSentTime
-			);
+			if (responseUuid) {
+				assistantMessage = messages.find(msg => msg.uuid === responseUuid);
+			} else {
+				assistantMessage = messages.find(msg =>
+					msg.sender === 'assistant' &&
+					msg.created_at > requestSentTime
+				);
+			}
 			attempts++;
 		}
 
 		if (!assistantMessage) {
 			console.error('Messages after retry:', messages);
-			console.error('Request sent at:', requestSentTime);
+			console.error('Response UUID:', responseUuid, 'requestSentTime:', requestSentTime);
 			throw new Error('Completion finished but no assistant message found after retry');
 		}
 
@@ -1586,10 +1607,14 @@ async function getAccountSettings() {
  * @param {Object} settings - Settings to update
  */
 async function updateAccountSettings(settings) {
+	// Filter out read-only internal fields that the API rejects
+	const filtered = Object.fromEntries(
+		Object.entries(settings).filter(([key]) => !key.startsWith('internal_'))
+	);
 	const response = await fetch('https://claude.ai/api/account/settings', {
 		method: 'PATCH',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify(settings)
+		body: JSON.stringify(filtered)
 	});
 	if (!response.ok) throw new Error('Failed to update account settings');
 	return await response.json();
@@ -1905,347 +1930,3 @@ const CLAUDE_MODELS = [
 
 const DEFAULT_CLAUDE_MODEL = CLAUDE_MODELS[0].value;
 const FAST_MODEL = 'claude-haiku-4-5-20251001';
-
-// Test function for verifying ClaudeMessage and file classes work correctly
-// Usage: window.testClaudeAPI() or window.testClaudeAPI({ sendMessage: true })
-window.testClaudeAPI = async function (options = {}) {
-	const { sendMessage = false } = options;
-	const results = { passed: [], failed: [], warnings: [] };
-
-	function pass(test) {
-		console.log(`✅ ${test}`);
-		results.passed.push(test);
-	}
-
-	function fail(test, error) {
-		console.error(`❌ ${test}:`, error);
-		results.failed.push({ test, error: error.message || error });
-	}
-
-	function warn(msg) {
-		console.warn(`⚠️ ${msg}`);
-		results.warnings.push(msg);
-	}
-
-	console.log('=== ClaudeAPI Test Suite ===\n');
-
-	// Get current conversation
-	const conversationId = getConversationId();
-	if (!conversationId) {
-		fail('Get conversation ID', 'Not on a conversation page');
-		return results;
-	}
-	pass('Get conversation ID');
-
-	const orgId = getOrgId();
-	pass('Get org ID');
-
-	const conversation = new ClaudeConversation(orgId, conversationId);
-
-	// Test getData
-	let convData;
-	try {
-		convData = await conversation.getData();
-		pass('ClaudeConversation.getData()');
-		console.log(`  Conversation: "${convData.name}"`);
-		console.log(`  Code execution: ${convData.settings?.enabled_monkeys_in_a_barrel ? 'ON' : 'OFF'}`);
-	} catch (e) {
-		fail('ClaudeConversation.getData()', e);
-		return results;
-	}
-
-	// Test getMessages
-	let messages;
-	try {
-		messages = await conversation.getMessages();
-		pass(`ClaudeConversation.getMessages() - ${messages.length} messages`);
-
-		// Verify they're ClaudeMessage instances
-		if (messages.every(m => m instanceof ClaudeMessage)) {
-			pass('All messages are ClaudeMessage instances');
-		} else {
-			fail('All messages are ClaudeMessage instances', 'Some messages are not ClaudeMessage');
-		}
-	} catch (e) {
-		fail('ClaudeConversation.getMessages()', e);
-		return results;
-	}
-
-	// Test ClaudeMessage properties on first user message
-	const userMsg = messages.find(m => m.sender === 'human');
-	if (userMsg) {
-		console.log('\n--- Testing ClaudeMessage on first user message ---');
-
-		// Test text getter
-		try {
-			const text = userMsg.text;
-			pass(`text getter: "${text.slice(0, 50)}${text.length > 50 ? '...' : ''}"`);
-		} catch (e) {
-			fail('text getter', e);
-		}
-
-		// Test files getter
-		try {
-			const files = userMsg.files;
-			pass(`files getter: ${files.length} files`);
-			for (const f of files) {
-				const type = f instanceof ClaudeFile ? 'ClaudeFile' :
-					f instanceof ClaudeCodeExecutionFile ? 'ClaudeCodeExecutionFile' :
-						f instanceof ClaudeAttachment ? 'ClaudeAttachment' : 'Unknown';
-				console.log(`    - ${f.file_name} (${type})`);
-			}
-		} catch (e) {
-			fail('files getter', e);
-		}
-
-		// Test toHistoryJSON
-		try {
-			const json = userMsg.toHistoryJSON();
-			if (json.uuid && json.sender && json.content) {
-				pass('toHistoryJSON() produces valid structure');
-			} else {
-				fail('toHistoryJSON()', 'Missing required fields');
-			}
-		} catch (e) {
-			fail('toHistoryJSON()', e);
-		}
-
-		// Test fromHistoryJSON roundtrip
-		try {
-			const json = userMsg.toHistoryJSON();
-			const restored = ClaudeMessage.fromHistoryJSON(conversation, json);
-			if (restored.uuid === userMsg.uuid &&
-				restored.text === userMsg.text &&
-				restored.files.length === userMsg.files.length) {
-				pass('fromHistoryJSON() roundtrip preserves data');
-			} else {
-				fail('fromHistoryJSON() roundtrip', 'Data mismatch');
-			}
-		} catch (e) {
-			fail('fromHistoryJSON() roundtrip', e);
-		}
-
-		// Test toChatlogString
-		try {
-			const chatlog = userMsg.toChatlogString();
-			if (typeof chatlog === 'string' && chatlog.length > 0) {
-				pass(`toChatlogString(): ${chatlog.length} chars`);
-			} else {
-				fail('toChatlogString()', 'Empty or invalid result');
-			}
-		} catch (e) {
-			fail('toChatlogString()', e);
-		}
-	} else {
-		warn('No user message found to test ClaudeMessage properties');
-	}
-
-	// Test file operations
-	console.log('\n--- Testing File Operations ---');
-
-	// Find messages with files
-	const msgWithFiles = messages.find(m => m.files.length > 0);
-	if (msgWithFiles) {
-		const file = msgWithFiles.files[0];
-		console.log(`Testing with file: ${file.file_name}`);
-
-		// Test parseFileFromAPI
-		try {
-			const apiData = file.toApiFormat();
-			const parsed = parseFileFromAPI(apiData, conversation);
-			const expectedType = file.constructor.name;
-			const actualType = parsed.constructor.name;
-			if (expectedType === actualType) {
-				pass(`parseFileFromAPI() correctly identifies ${expectedType}`);
-			} else {
-				fail('parseFileFromAPI()', `Expected ${expectedType}, got ${actualType}`);
-			}
-		} catch (e) {
-			fail('parseFileFromAPI()', e);
-		}
-
-		// Test download (if not ClaudeAttachment)
-		if (!(file instanceof ClaudeAttachment)) {
-			try {
-				const downloadUrl = file.getDownloadUrl();
-				if (downloadUrl) {
-					pass(`getDownloadUrl(): ${downloadUrl.slice(0, 60)}...`);
-
-					const blob = await file.download();
-					if (blob && blob.size > 0) {
-						pass(`download(): ${blob.size} bytes`);
-
-						// Test addFile with existing file (re-upload)
-						try {
-							const reuploadTestMsg = new ClaudeMessage(conversation);
-							const reuploaded = await reuploadTestMsg.addFile(file);
-							if (reuploaded) {
-								const reuploadType = reuploaded.constructor.name;
-								pass(`addFile(existingFile) returned ${reuploadType}: ${reuploaded.file_name}`);
-							} else {
-								fail('addFile(existingFile)', 'Returned null');
-							}
-						} catch (e) {
-							fail('addFile(existingFile)', e);
-						}
-					} else {
-						fail('download()', 'Empty blob');
-					}
-				} else {
-					warn('No download URL available for file');
-				}
-			} catch (e) {
-				fail('File download/reupload', e);
-			}
-		} else {
-			pass('ClaudeAttachment detected (no download needed - inline content)');
-		}
-	} else {
-		warn('No messages with files found - skipping file tests');
-	}
-
-	// Test ClaudeMessage modification methods
-	console.log('\n--- Testing ClaudeMessage Modification ---');
-
-	// Create a fresh message for testing modifications
-	const testMsg = new ClaudeMessage(conversation);
-	testMsg.text = 'Test message content';
-
-	// Test text setter
-	if (testMsg.text === 'Test message content') {
-		pass('text setter works');
-	} else {
-		fail('text setter', 'Text not set correctly');
-	}
-
-	// Test clearFiles
-	testMsg.attachFile(ClaudeAttachment.fromText('test', 'test.txt'));
-	testMsg.clearFiles();
-	if (testMsg.files.length === 0) {
-		pass('clearFiles() removes all files');
-	} else {
-		fail('clearFiles()', 'Files not cleared');
-	}
-
-	// Test removeToolCalls
-	testMsg.content = [
-		{ type: 'text', text: 'Hello' },
-		{ type: 'tool_use', id: '123', name: 'test' },
-		{ type: 'tool_result', tool_use_id: '123' }
-	];
-	testMsg.removeToolCalls();
-	if (testMsg.content.length === 1 && testMsg.content[0].type === 'text') {
-		pass('removeToolCalls() strips tool content');
-	} else {
-		fail('removeToolCalls()', `Expected 1 text item, got ${testMsg.content.length} items`);
-	}
-
-	// Test addFile with string (creates attachment or code exec file)
-	console.log('\n--- Testing addFile ---');
-	try {
-		const addedFile = await testMsg.addFile('Test file content', 'test-content.txt');
-		const expectedType = convData.settings?.enabled_monkeys_in_a_barrel
-			? 'ClaudeCodeExecutionFile'
-			: 'ClaudeAttachment';
-		const actualType = addedFile.constructor.name;
-		if (actualType === expectedType) {
-			pass(`addFile(string) creates ${expectedType}`);
-		} else {
-			warn(`addFile(string) created ${actualType}, expected ${expectedType}`);
-		}
-	} catch (e) {
-		fail('addFile(string)', e);
-	}
-
-	// Test toCompletionJSON
-	console.log('\n--- Testing toCompletionJSON ---');
-	const completionMsg = new ClaudeMessage(conversation);
-	completionMsg.text = 'Test prompt';
-	completionMsg.sender = 'human';
-
-	try {
-		const completionJson = completionMsg.toCompletionJSON();
-		if (completionJson.prompt === 'Test prompt' &&
-			completionJson.parent_message_uuid &&
-			Array.isArray(completionJson.attachments) &&
-			Array.isArray(completionJson.files)) {
-			pass('toCompletionJSON() produces valid structure');
-		} else {
-			fail('toCompletionJSON()', 'Missing required fields');
-		}
-	} catch (e) {
-		fail('toCompletionJSON()', e);
-	}
-
-	// Optional: Send a test message with all files reuploaded
-	if (sendMessage) {
-		console.log('\n--- Testing sendMessageAndWaitForResponse ---');
-		warn('This will send a real message to Claude!');
-
-		const testPrompt = new ClaudeMessage(conversation);
-		testPrompt.text = 'This is a test message from testClaudeAPI(). Please respond with just "Test received." and nothing else.';
-		testPrompt.sender = 'human';
-
-		// Collect all unique files from all messages
-		const allFiles = [];
-		const seenIds = new Set();
-		for (const msg of messages) {
-			for (const file of msg.files) {
-				const id = file.file_uuid || file.file_name;
-				if (!seenIds.has(id)) {
-					seenIds.add(id);
-					allFiles.push(file);
-				}
-			}
-		}
-
-		console.log(`Found ${allFiles.length} unique files to reupload`);
-
-		// Re-upload all files using addFile()
-		for (const fileToReupload of allFiles) {
-			try {
-				const reuploaded = await testPrompt.addFile(fileToReupload);
-				const action = fileToReupload instanceof ClaudeAttachment ? 'Included' : 'Re-uploaded';
-				pass(`${action} file via addFile(): ${reuploaded.file_name} (${reuploaded.constructor.name})`);
-			} catch (e) {
-				fail(`addFile(${fileToReupload.file_name})`, e.message);
-			}
-		}
-
-		// Also add a new text attachment via addFile(string)
-		try {
-			const testContent = `Test attachment created at ${new Date().toISOString()}`;
-			const newAttachment = await testPrompt.addFile(testContent, 'test-attachment.txt');
-			pass(`addFile(string) created: ${newAttachment.file_name} (${newAttachment.constructor.name})`);
-		} catch (e) {
-			fail('addFile(string)', e.message);
-		}
-
-		try {
-			const response = await conversation.sendMessageAndWaitForResponse(testPrompt);
-			if (response && response.uuid) {
-				pass(`Message sent and response received: ${response.uuid}`);
-				console.log(`  Response text: "${response.text.slice(0, 100)}..."`);
-			} else {
-				fail('sendMessageAndWaitForResponse()', 'No response received');
-			}
-		} catch (e) {
-			fail('sendMessageAndWaitForResponse()', e);
-		}
-	}
-
-	// Summary
-	console.log('\n=== Test Summary ===');
-	console.log(`Passed: ${results.passed.length}`);
-	console.log(`Failed: ${results.failed.length}`);
-	console.log(`Warnings: ${results.warnings.length}`);
-
-	if (results.failed.length > 0) {
-		console.log('\nFailed tests:');
-		for (const f of results.failed) {
-			console.log(`  - ${f.test}: ${f.error}`);
-		}
-	}
-
-	return results;
-};

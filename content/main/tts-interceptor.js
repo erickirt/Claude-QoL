@@ -61,7 +61,7 @@
 	};
 
 	// Helper to fetch conversation and find new assistant message
-	async function findNewAssistantMessage(orgId, conversationId, requestSentTime, maxRetries = 2) {
+	async function findNewAssistantMessage(orgId, conversationId, responseUuid, requestSentTime, maxRetries = 2) {
 		for (let attempt = 0; attempt <= maxRetries; attempt++) {
 			if (attempt > 0) {
 				console.log(`Assistant message not found, retrying (${attempt}/${maxRetries})...`);
@@ -81,10 +81,15 @@
 				const data = await response.json();
 				const messages = data.chat_messages || [];
 
-				const assistantMessage = messages.find(msg =>
-					msg.sender === 'assistant' &&
-					msg.created_at > requestSentTime
-				);
+				let assistantMessage;
+				if (responseUuid) {
+					assistantMessage = messages.find(msg => msg.uuid === responseUuid);
+				} else {
+					assistantMessage = messages.find(msg =>
+						msg.sender === 'assistant' &&
+						msg.created_at > requestSentTime
+					);
+				}
 
 				if (assistantMessage) {
 					return assistantMessage;
@@ -140,16 +145,32 @@
 				try {
 					const reader = clonedResponse.body.getReader();
 					const decoder = new TextDecoder();
+					let responseUuid = null;
 
-					// Consume until done
+					// Consume until done, extracting response UUID from message_start
 					while (true) {
 						const { done, value } = await reader.read();
 
 						if (done) break;
 
-						// Decode and check for completion signal
 						const chunk = decoder.decode(value, { stream: true });
-						// Look for the message_stop event (or whatever Claude uses)
+
+						// Extract response UUID from the message_start event
+						if (!responseUuid && chunk.includes('"type":"message_start"')) {
+							const lines = chunk.split('\n');
+							for (const line of lines) {
+								const trimmed = line.trim();
+								if (trimmed.startsWith('data: ') && trimmed.includes('"message_start"')) {
+									try {
+										const parsed = JSON.parse(trimmed.substring(6));
+										responseUuid = parsed.message?.uuid;
+										console.log('TTS: Got response UUID from message_start:', responseUuid);
+									} catch (e) {}
+									break;
+								}
+							}
+						}
+
 						if (chunk.includes('event: message_stop') || chunk.includes('"type":"message_stop"')) {
 							console.log('Stream completion detected');
 							reader.releaseLock();
@@ -160,7 +181,7 @@
 					reader.releaseLock();
 					console.log('Completed reading completion response stream for TTS handling');
 					// Now fetch the conversation to find the new message
-					const assistantMessage = await findNewAssistantMessage(orgId, conversationId, requestSentTime);
+					const assistantMessage = await findNewAssistantMessage(orgId, conversationId, responseUuid, requestSentTime);
 					console.log('Found assistant message for TTS:', assistantMessage);
 					if (assistantMessage) {
 						window.postMessage({

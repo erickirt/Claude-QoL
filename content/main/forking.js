@@ -599,11 +599,30 @@ If this is a writing or creative discussion, include sections for characters, pl
 		// Re-upload files using addFile() which handles all file types
 		const failedFiles = [];
 		for (const f of dedupedFiles) {
-			try {
-				await forkMessage.addFile(f);
-			} catch (error) {
-				console.log(`Failed to transfer file ${f.file_name}:`, error);
-				failedFiles.push(f.file_name);
+			let uploaded = false;
+			while (!uploaded) {
+				try {
+					await forkMessage.addFile(f);
+					uploaded = true;
+				} catch (error) {
+					console.log(`Failed to transfer file ${f.file_name}:`, error);
+					const choice = await showClaudeThreeOption(
+						'File Upload Failed',
+						`Failed to upload "${f.file_name}":\n${error.message}`,
+						{
+							left: { text: 'Give Up' },
+							middle: { text: 'Skip File' },
+							right: { text: 'Retry', variant: 'primary' }
+						}
+					);
+					if (choice === 'left') {
+						throw new Error('USER_CANCELLED');
+					} else if (choice === 'middle') {
+						failedFiles.push(f.file_name);
+						break;
+					}
+					// 'right' = retry → while loop continues
+				}
 			}
 		}
 
@@ -754,12 +773,31 @@ If this is a writing or creative discussion, include sections for characters, pl
 		const chatlogAtt = ClaudeConversation.buildChatlog(messages, { includeRoleLabels: true });
 		await summaryMessage.addFile(chatlogAtt.text, chatlogAtt.filename, true);
 
-		// Re-upload files using addFile() (skip failures gracefully)
+		// Re-upload files using addFile()
 		for (const f of files) {
-			try {
-				await summaryMessage.addFile(f);
-			} catch (error) {
-				console.warn(`Skipping file ${f.file_name} during summarization: ${error.message}`);
+			let uploaded = false;
+			while (!uploaded) {
+				try {
+					await summaryMessage.addFile(f);
+					uploaded = true;
+				} catch (error) {
+					console.warn(`Failed file ${f.file_name} during summarization:`, error);
+					const choice = await showClaudeThreeOption(
+						'File Upload Failed',
+						`Failed to upload "${f.file_name}" during summarization:\n${error.message}`,
+						{
+							left: { text: 'Give Up' },
+							middle: { text: 'Skip File' },
+							right: { text: 'Retry', variant: 'primary' }
+						}
+					);
+					if (choice === 'left') {
+						throw new Error('USER_CANCELLED');
+					} else if (choice === 'middle') {
+						break;
+					}
+					// 'right' = retry → while loop continues
+				}
 			}
 		}
 
