@@ -135,7 +135,9 @@ function makeDraggable(element, dragHandle = null) {
 // Base floating card class
 class FloatingCard {
 	constructor() {
-		this.defaultPosition = { top: '20px', right: '20px' };
+		// Electron needs extra top offset to clear the toolbar in the content pane
+		const isElectronClient = !!document.querySelector('.dframe-content-inner');
+		this.defaultPosition = { top: isElectronClient ? '40px' : '20px', right: '20px' };
 		this.element = document.createElement('div');
 		this.element.className = 'bg-bg-100 border border-border-400 text-text-000 qol-card';
 	}
@@ -163,7 +165,18 @@ class FloatingCard {
 				this.element.style[key] = value;
 			});
 		}
-		document.body.appendChild(this.element);
+		// On Electron, inject into content area so cards don't overlap window controls.
+		// Ensure the mount is a positioning context so `top`/`right` are relative to it.
+		const electronMount = document.querySelector('.dframe-content-inner');
+		if (electronMount) {
+			if (getComputedStyle(electronMount).position === 'static') {
+				electronMount.style.position = 'relative';
+			}
+			this.element.style.position = 'absolute';
+			electronMount.appendChild(this.element);
+		} else {
+			document.body.appendChild(this.element);
+		}
 	}
 
 	makeCardDraggable(dragHandle = null) {
