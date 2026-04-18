@@ -130,7 +130,7 @@
 
 			const selectOptions = [];
 			if (currentPresetName === 'Unsaved') {
-				selectOptions.push({ value: '__unsaved', label: 'Unsaved (current preferences not saved as a preset)' });
+				selectOptions.push({ value: '__unsaved', label: 'Currently unsaved' });
 			}
 			for (const name of Object.keys(presets)) {
 				selectOptions.push({ value: name, label: name });

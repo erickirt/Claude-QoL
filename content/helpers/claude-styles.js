@@ -894,11 +894,15 @@ const pageLayouts = {
 	},
 	coworkHome: {
 		group: 'coworkHome',
-		match() { return window.location.pathname === '/task/new'; },
+		match() {
+			return window.location.pathname === '/task/new'
+				&& !!document.querySelector('.dframe-pane-header');
+		},
 		getAnchor() {
-			const mainContent = document.getElementById('main-content');
-			if (!mainContent) return null;
-			return { parent: mainContent, referenceNode: null, mode: 'self-container' };
+			const header = document.querySelector('.dframe-pane-header');
+			if (!header) return null;
+			const actionsSlot = header.querySelector('#dframe-header-actions-slot');
+			return { parent: header, referenceNode: actionsSlot || null, mode: 'inline' };
 		},
 	},
 	coworkChat: {
@@ -960,15 +964,13 @@ const pageLayouts = {
 		group: 'home',
 		match() {
 			const isHome = window.location.pathname === '/new' || window.location.pathname === '/';
-			if (!isHome) return false;
-			const mainContent = document.getElementById('main-content');
-			if (!mainContent) return false;
-			return !mainContent.querySelector('[class*="look-around"]');
+			return isHome && !!document.querySelector('.dframe-pane-header');
 		},
 		getAnchor() {
-			const mainContent = document.getElementById('main-content');
-			if (!mainContent) return null;
-			return { parent: mainContent, referenceNode: null, mode: 'self-container' };
+			const header = document.querySelector('.dframe-pane-header');
+			if (!header) return null;
+			const actionsSlot = header.querySelector('#dframe-header-actions-slot');
+			return { parent: header, referenceNode: actionsSlot || null, mode: 'inline' };
 		},
 	},
 	project: {
