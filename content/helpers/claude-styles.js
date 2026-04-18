@@ -994,6 +994,7 @@ const ButtonBar = {
 		'search-button',
 		'navigation-button',
 		'style-selector-button',
+		'preset-switcher-button',
 		'export-button',
 		'stt-settings-button',
 		'tts-settings-button',

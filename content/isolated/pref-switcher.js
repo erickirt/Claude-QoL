@@ -3,6 +3,8 @@
 	'use strict';
 	const channel = new BroadcastChannel('pref-switcher-updates');
 
+	const PRESET_ICON_SVG = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0" aria-hidden="true"><line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/></svg>`;
+
 	channel.addEventListener('message', (event) => {
 		if (event.data.type === 'preferences-changed') {
 			console.log('Preferences changed in another tab, refreshing UI...');
@@ -12,11 +14,8 @@
 
 	async function updateAllUI() {
 		setTimeout(async () => {
-			// Update sidebar dropdown if present
-			const sidebarSelect = document.querySelector('.preset-switcher-dropdown select');
-			if (sidebarSelect) {
-				await updateDropdownOptions(sidebarSelect);
-			}
+			// Update the header button appearance
+			await updatePresetButtonAppearance();
 
 			// Update settings UI if present
 			const settingsSelect = document.querySelector('.preset-manager-settings .preset-selector');
@@ -86,7 +85,7 @@
 		const presets = await getStoredPresets();
 		presets[name] = {
 			name: name,
-			content: content.trim(),  // <-- Trim on save
+			content: content.trim(),
 			lastModified: Date.now()
 		};
 		await settingsRegistry.set(SETTINGS_KEYS.PREF_SWITCHER.PRESETS, presets);
@@ -98,188 +97,94 @@
 
 		// Check if current preferences match any stored preset
 		for (const [name, preset] of Object.entries(presets)) {
-			if (preset.content.trim() === currentPrefs.trim()) {  // <-- Just add .trim()
+			if (preset.content.trim() === currentPrefs.trim()) {
 				return name;
 			}
 		}
 
 		// If no match and preferences are not empty, return "Unsaved"
-		return currentPrefs.trim() ? 'Unsaved' : 'None';  // <-- And here too
+		return currentPrefs.trim() ? 'Unsaved' : 'None';
 	}
 
-	// ======== UI COMPONENTS ========
-	function createPresetDropdown() {
-		const container = document.createElement('div');
-		container.className = 'relative w-full';
+	// ======== HEADER BUTTON ========
+	function createPresetButton() {
+		const button = createClaudeButton(PRESET_ICON_SVG, 'icon');
+		button.classList.add('shrink-0', 'preset-switcher-button');
+		button.onclick = async () => {
+			await showPresetPickerModal();
+		};
+		return button;
+	}
 
-		const select = document.createElement('select');
-		select.className = `preset-selector text-text-100 transition-colors cursor-pointer appearance-none 
-        w-full h-8 px-3 pr-8 rounded-md bg-bg-000 border border-border-300 hover:border-border-200 text-sm`;
+	async function showPresetPickerModal() {
+		const loadingModal = createLoadingModal('Loading presets...');
+		loadingModal.show();
 
-		// Add temporary loading option
-		const loadingOption = document.createElement('option');
-		loadingOption.value = '__loading';
-		loadingOption.textContent = 'Preset: Loading...';
-		select.appendChild(loadingOption);
-
-		// Add dropdown arrow
-		const arrowContainer = document.createElement('div');
-		arrowContainer.className = 'pointer-events-none absolute top-0 right-0 flex items-center px-2 text-text-500 h-8';
-		arrowContainer.innerHTML = `
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 20 20">
-            <path d="M14.128 7.16482C14.3126 6.95983 14.6298 6.94336 14.835 7.12771C15.0402 7.31242 15.0567 7.62952 14.8721 7.83477L10.372 12.835L10.2939 12.9053C10.2093 12.9667 10.1063 13 9.99995 13C9.85833 12.9999 9.72264 12.9402 9.62788 12.835L5.12778 7.83477L5.0682 7.75273C4.95072 7.55225 4.98544 7.28926 5.16489 7.12771C5.34445 6.96617 5.60969 6.95939 5.79674 7.09744L5.87193 7.16482L9.99995 11.7519L14.128 7.16482Z"/>
-        </svg>
-    `;
-
-		container.appendChild(select);
-		container.appendChild(arrowContainer);
-
-		// Set up change handler
-		select.addEventListener('change', async () => {
-			const selectedPreset = select.value;
-
-			if (selectedPreset === '__unsaved' || selectedPreset === '__loading') {
-				// Don't do anything for these special options
-				return;
-			}
-
+		try {
 			const presets = await getStoredPresets();
-			const preset = presets[selectedPreset];
+			const currentPresetName = await getCurrentPresetName();
 
-			if (preset) {
-				const success = await setPreferences(preset.content);
-				if (!success) {
-					// Revert selection on failure
-					await updateDropdownOptions(select);
-				}
+			loadingModal.destroy();
+
+			const contentContainer = document.createElement('div');
+
+			const selectOptions = [];
+			if (currentPresetName === 'Unsaved') {
+				selectOptions.push({ value: '__unsaved', label: 'Unsaved (current preferences not saved as a preset)' });
 			}
-		});
+			for (const name of Object.keys(presets)) {
+				selectOptions.push({ value: name, label: name });
+			}
 
-		// Initial population
-		updateDropdownOptions(select);
+			const initialValue = currentPresetName === 'Unsaved' ? '__unsaved' : currentPresetName;
+			const select = createClaudeSelect(selectOptions, initialValue);
+			select.classList.add('mb-4');
 
-		return container;
+			const infoText = document.createElement('div');
+			infoText.className = CLAUDE_CLASSES.TEXT_MUTED;
+			infoText.textContent = 'Changing preferences will reset the caching status of the conversation.';
+
+			contentContainer.appendChild(select);
+			contentContainer.appendChild(infoText);
+
+			const modal = new ClaudeModal('Switch Preferences Preset', contentContainer);
+			modal.addCancel();
+			modal.addConfirm('Apply', async () => {
+				const selected = select.value;
+				if (selected === '__unsaved') return;
+
+				const preset = presets[selected];
+				if (!preset) return;
+
+				const ok = await setPreferences(preset.content);
+				if (!ok) {
+					showClaudeAlert('Error', 'Failed to update preferences. Please try again.');
+					return;
+				}
+
+				await updatePresetButtonAppearance();
+			});
+
+			modal.show();
+		} catch (error) {
+			console.error('Error loading presets:', error);
+			loadingModal.destroy();
+			showClaudeAlert('Error', 'Failed to load presets. Please try again.');
+		}
 	}
 
-	async function updateDropdownOptions(select) {
-		const presets = await getStoredPresets();
+	async function updatePresetButtonAppearance() {
+		const button = document.querySelector('.preset-switcher-button');
+		if (!button) return;
+
 		const currentPresetName = await getCurrentPresetName();
 
-		// Store current selection
-		const previousValue = select.value;
-
-		// Clear and rebuild options
-		select.innerHTML = '';
-
-		// Add Unsaved option if needed
-		if (currentPresetName === 'Unsaved') {
-			const option = document.createElement('option');
-			option.value = '__unsaved';
-			option.textContent = 'Preset: Unsaved';
-			select.appendChild(option);
-		}
-
-		// Add all stored presets
-		for (const name of Object.keys(presets)) {
-			const option = document.createElement('option');
-			option.value = name;
-			option.textContent = `Preset: ${name}`;
-			select.appendChild(option);
-		}
-
-		// Set current selection
-		if (currentPresetName === 'Unsaved') {
-			select.value = '__unsaved';
+		if (currentPresetName === 'None') {
+			button.style.color = '';
 		} else {
-			select.value = currentPresetName;
+			button.style.color = '#0084ff';
 		}
-	}
-
-	// ======== SIDEBAR INJECTION ========
-	async function findSidebarContainers() {
-		// First find the nav element
-		const sidebarNav = document.querySelector('nav.flex');
-		if (!sidebarNav) {
-			if (!window.location.pathname.includes('/code')) console.error('Could not find sidebar nav');
-			return null;
-		}
-
-		// This is for claude code on the desktop client and webUI, which has a different UI.
-		if (window.location.pathname.includes('claude-code-desktop') || window.location.pathname.includes('/code')) {
-			const container = sidebarNav.querySelector('.flex-grow.overflow-y-auto')
-			const mainsection = container?.querySelector('.px-1');
-			if (!mainsection) {
-				console.warn('Could not find main section in sidebar for code interface');
-				return null;
-			}
-			// Just insert it before the only section regardless of starred/recents since they don't exist in the same way in the code interface
-			return {
-				container: container,
-				starredSection: mainsection,
-				recentsSection: mainsection
-			};
-		}
-
-		// Look for the main container that holds all sections
-		const containerWrapper = sidebarNav.querySelector('.flex.flex-grow.flex-col.overflow-y-auto')
-		const containers = containerWrapper?.querySelectorAll('.flex-1.relative');
-		if (!containers) {
-			console.warn('Could not find any sidebar containers');
-			return null;
-		}
-
-		let mainContainer = containers[containers.length - 1].querySelector('.px-2.mt-4');
-		if (!mainContainer) mainContainer = containers[containers.length - 1].querySelector('.px-2.pt-2');
-		if (!mainContainer) {
-			console.error('Could not find main container in sidebar');
-			return null;
-		}
-
-		// Look for the Starred section
-		const starredSection = mainContainer.querySelector('div.flex.flex-col.mb-4');
-
-		// Check if the Recents section exists as the next sibling
-		let recentsSection = null;
-		if (starredSection) {
-			recentsSection = starredSection.nextElementSibling;
-		} else {
-			recentsSection = mainContainer.firstChild;
-		}
-
-		if (!recentsSection) {
-			console.error('Could not find any injection site');
-		}
-
-		// Return the parent container so we can insert our UI between Starred and Recents
-		return {
-			container: mainContainer,
-			starredSection: starredSection,
-			recentsSection: recentsSection
-		};
-	}
-
-	function createPresetSection() {
-		const section = document.createElement('div');
-		section.className = 'flex flex-col mb-6 preset-switcher-section';
-
-		const title = document.createElement('h3');
-		title.textContent = 'Preferences Switcher';
-		title.className = 'text-text-500 pb-2 mt-1 text-xs select-none pl-2 pr-2';
-		createClaudeTooltip(title, 'Changing preferences will reset the caching status of the conversation');
-
-		// Content
-		const content = document.createElement('div');
-		content.className = 'flex min-h-0 flex-col pl-2';
-		content.style.paddingRight = '0.25rem';
-
-		const dropdown = createPresetDropdown();
-		dropdown.classList.add('preset-switcher-dropdown');
-		content.appendChild(dropdown);
-
-		section.appendChild(title);
-		section.appendChild(content);
-
-		return section;
+		button.tooltip?.updateText(`Preferences preset: ${currentPresetName}`);
 	}
 
 	// ======== SETTINGS PAGE INTEGRATION ========
@@ -318,36 +223,36 @@
                         </div>
                     </div>
                 </div>
-                <button class="new-preset-btn inline-flex items-center justify-center relative shrink-0 
-                    text-text-000 font-base-bold border-0.5 border-border-200 
+                <button class="new-preset-btn inline-flex items-center justify-center relative shrink-0
+                    text-text-000 font-base-bold border-0.5 border-border-200
                     bg-bg-300/0 hover:bg-bg-400 transition duration-100
                     h-9 px-4 py-2 rounded-lg min-w-[5rem]">
                     New Preset
                 </button>
             </div>
-            
+
             <!-- Preset content editor -->
             <div>
                 <label class="text-text-200 mb-1 block text-sm">Preset Content</label>
                 <div class="grid">
-                    <textarea class="preset-content bg-bg-000 border border-border-300 p-3 leading-5 rounded-[0.6rem] transition-colors hover:border-border-200 placeholder:text-text-500 resize-none w-full" 
-                        rows="6" 
+                    <textarea class="preset-content bg-bg-000 border border-border-300 p-3 leading-5 rounded-[0.6rem] transition-colors hover:border-border-200 placeholder:text-text-500 resize-none w-full"
+                        rows="6"
                         placeholder="Enter your preferences here..."
                         data-1p-ignore="true"></textarea>
                 </div>
             </div>
-            
+
             <!-- Action buttons -->
             <div class="flex gap-3 justify-end">
-                <button class="delete-preset-btn inline-flex items-center justify-center relative shrink-0 
-                    text-text-000 font-base-bold border-0.5 border-border-200 
+                <button class="delete-preset-btn inline-flex items-center justify-center relative shrink-0
+                    text-text-000 font-base-bold border-0.5 border-border-200
                     bg-bg-300/0 hover:bg-bg-400 transition duration-100
                     h-9 px-4 py-2 rounded-lg min-w-[5rem]
                     disabled:pointer-events-none disabled:opacity-50">
                     Delete
                 </button>
-                <button class="save-preset-btn inline-flex items-center justify-center relative shrink-0 
-                    bg-text-000 text-bg-000 font-base-bold 
+                <button class="save-preset-btn inline-flex items-center justify-center relative shrink-0
+                    bg-text-000 text-bg-000 font-base-bold
                     hover:bg-text-100 transition duration-100
                     h-9 px-4 py-2 rounded-lg min-w-[5rem]">
                     Save Changes
@@ -387,7 +292,7 @@
 					// Disable delete button for "None" preset
 					deleteBtn.disabled = (presetName === 'None');
 
-					// Apply the preset immediately (like the sidebar does)
+					// Apply the preset immediately (like the sidebar did)
 					await setPreferences(preset.content);
 				}
 			}
@@ -508,65 +413,30 @@
 		console.log('Settings UI injected');
 	}
 
-	async function tryInjectUI() {
-		const existingSection = document.querySelector('.preset-switcher-section');
-
-		// Check if Usage Tracker is present
-		const usageTrackerSection = document.querySelector('.ut-container')?.closest('.flex.flex-col.mb-6');
-
-		if (existingSection) {
-			// If Usage Tracker exists, make sure we're positioned after it
-			if (usageTrackerSection) {
-				const isAfterUsageTracker = usageTrackerSection.compareDocumentPosition(existingSection) & Node.DOCUMENT_POSITION_FOLLOWING;
-				if (!isAfterUsageTracker) {
-					// We're before Usage Tracker, need to re-inject
-					existingSection.remove();
-				} else {
-					// Correctly positioned, nothing to do
-					return;
-				}
-			} else {
-				// No Usage Tracker, we're fine
-				return;
-			}
-		}
-
-		const containers = await findSidebarContainers();
-		if (!containers) {
-			return;
-		}
-
-		const presetSection = createPresetSection();
-
-		// If Usage Tracker exists, insert after it
-		if (usageTrackerSection && usageTrackerSection.parentElement === containers.container) {
-			usageTrackerSection.after(presetSection);
-		} else if (containers.starredSection) {
-			// Insert between starred and recents (or at the beginning)
-			containers.container.insertBefore(presetSection, containers.starredSection);
-		} else {
-			containers.container.insertBefore(presetSection, containers.recentsSection);
-		}
-	}
-
 	// ======== INITIALIZATION ========
 	function initialize() {
-		// Try to inject the settings UI immediately
+		// Register the header button
+		ButtonBar.register({
+			buttonClass: 'preset-switcher-button',
+			createFn: createPresetButton,
+			tooltip: 'Preferences preset: None',
+			forceDisplayOnMobile: true,
+			pages: ['chat', 'home', 'project', 'coworkChat', 'coworkHome'],
+			onInjected: () => updatePresetButtonAppearance(),
+		});
+
+		// Keep the settings-page UI polling
 		tryInjectSettingsUI();
 		setInterval(tryInjectSettingsUI, 1000);
 
-		// Inject sidebar UI - will automatically position after Usage Tracker if present
-		tryInjectUI();
-		setInterval(tryInjectUI, 1000);
-
-		// Also listen for navigation changes
+		// Refresh settings UI on navigation
 		let lastPath = window.location.pathname;
 		setInterval(() => {
 			if (window.location.pathname !== lastPath) {
 				lastPath = window.location.pathname;
 				setTimeout(() => {
-					tryInjectUI();
 					tryInjectSettingsUI();
+					updatePresetButtonAppearance();
 				}, 500);
 			}
 		}, 1000);
