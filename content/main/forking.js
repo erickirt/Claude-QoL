@@ -322,7 +322,7 @@ If this is a writing or creative discussion, include sections for characters, pl
 				await getConversationMessages(orgId, conversationId, messageUuid);
 
 			const chatName = conversationData.name;
-			const projectUuid = conversationData.project?.uuid || null;
+			const projectUuid = conversationData.project?.uuid || conversationData?.project_uuid || null;
 			pendingFork.sourceSettings = conversationData.settings || {};
 
 			// Fetch existing phantom messages for this conversation
