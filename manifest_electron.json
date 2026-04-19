@@ -1,7 +1,7 @@
 {
 	"manifest_version": 3,
 	"name": "Claude QoL - Export, Fork, Search, and more",
-	"version": "2.5.8",
+	"version": "2.5.9",
 	"description": "Collection of claude.ai enhancements: Exporting/Importing chats, Forking, Text Search, Bookmarks, TTS, STT, and more.",
 	"permissions": [
 		"storage"
