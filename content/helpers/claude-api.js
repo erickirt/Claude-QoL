@@ -2,6 +2,8 @@
 
 const SUPPORTED_LOCALES = ['en-US', 'de-DE', 'fr-FR', 'ko-KR', 'ja-JP', 'es-419', 'es-ES', 'it-IT', 'hi-IN', 'pt-BR', 'id-ID'];
 
+const MAX_FILES_PER_MESSAGE = 18;
+
 let _cachedLocale = null;
 async function fetchAndCacheLocale() {
 	// Check localStorage first
@@ -210,19 +212,16 @@ class ClaudeConversation {
 		return this.conversationId;
 	}
 
-	// Send a message and wait for response
+	// Send a message and wait for response.
+	// options.applyCurrentStyle (default true): attach the user's current global
+	// style to the send. Set false for throwaway completions (e.g. TTS dialogue
+	// analysis) where the style would just distort the output.
 	async sendMessageAndWaitForResponse(promptOrMessage, options = {}) {
-		let requestBody;
+		const { applyCurrentStyle = true } = options;
+		const currentStyle = applyCurrentStyle ? await getCurrentUserStyle(this.orgId) : null;
 
-		if (promptOrMessage instanceof ClaudeMessage) {
-			// Use toCompletionJSON() which produces correct format
-			requestBody = promptOrMessage.toCompletionJSON();
-			// Allow options to override model if provided
-			if (options.model) {
-				requestBody.model = options.model;
-			}
-		} else {
-			// Existing string prompt behavior
+		// String path: plain prompts carry no files, no splitting needed.
+		if (!(promptOrMessage instanceof ClaudeMessage)) {
 			const {
 				model = null,
 				parentMessageUuid = '00000000-0000-4000-8000-000000000000',
@@ -232,22 +231,76 @@ class ClaudeConversation {
 				personalizedStyles = null
 			} = options;
 
-			requestBody = {
+			const requestBody = {
 				prompt: promptOrMessage,
 				parent_message_uuid: parentMessageUuid,
 				attachments,
 				files,
 				sync_sources: syncSources,
-				personalized_styles: personalizedStyles,
+				personalized_styles: personalizedStyles ?? (currentStyle ? [currentStyle] : null),
 				rendering_mode: "messages"
 			};
 
 			if (model !== null) {
 				requestBody.model = model;
 			}
+
+			return this._postCompletionAndAwaitAssistant(requestBody);
 		}
 
-		// Log time BEFORE sending request
+		const msg = promptOrMessage;
+		const completionFiles = msg._getCompletionFiles();
+
+		// Non-split path: file count within the per-message cap.
+		if (completionFiles.length <= MAX_FILES_PER_MESSAGE) {
+			const requestBody = msg.toCompletionJSON();
+			if (options.model) requestBody.model = options.model;
+			if (currentStyle && (!requestBody.personalized_styles || requestBody.personalized_styles.length === 0)) {
+				requestBody.personalized_styles = [currentStyle];
+			}
+			return this._postCompletionAndAwaitAssistant(requestBody);
+		}
+
+		// Split path: chunk files across N sends. Intermediate "filler" sends
+		// carry only files + placeholder text; the final send carries the real
+		// prompt, attachments, styles, sync_sources, and the last file chunk.
+		const chunks = [];
+		for (let i = 0; i < completionFiles.length; i += MAX_FILES_PER_MESSAGE) {
+			chunks.push(completionFiles.slice(i, i + MAX_FILES_PER_MESSAGE));
+		}
+		const fillerChunks = chunks.slice(0, -1);
+		const lastChunk = chunks[chunks.length - 1];
+
+		let parentUuid = msg.parent_message_uuid;
+		for (let i = 0; i < fillerChunks.length; i++) {
+			const fillerBody = {
+				prompt: `[Forking chat in progress -> Uploading file batch ${i + 1}/${chunks.length} — please reply with "ok" so the next batch can be sent. Context will be in the last batch.]`,
+				parent_message_uuid: parentUuid,
+				timezone: msg.timezone,
+				personalized_styles: currentStyle ? [currentStyle] : [],
+				locale: msg.locale,
+				model: options.model ?? msg.model,
+				tools: msg.tools,
+				attachments: [],
+				files: fillerChunks[i].map(f => f.file_uuid),
+				sync_sources: [],
+				rendering_mode: msg.rendering_mode
+			};
+			const fillerAsst = await this._postCompletionAndAwaitAssistant(fillerBody);
+			parentUuid = fillerAsst.uuid;
+		}
+
+		const finalBody = msg.toCompletionJSON();
+		finalBody.parent_message_uuid = parentUuid;
+		finalBody.files = lastChunk.map(f => f.file_uuid);
+		if (options.model) finalBody.model = options.model;
+		if (currentStyle && (!finalBody.personalized_styles || finalBody.personalized_styles.length === 0)) {
+			finalBody.personalized_styles = [currentStyle];
+		}
+		return this._postCompletionAndAwaitAssistant(finalBody);
+	}
+
+	async _postCompletionAndAwaitAssistant(requestBody) {
 		const requestSentTime = new Date().toISOString();
 
 		const response = await fetch(`/api/organizations/${this.orgId}/chat_conversations/${this.conversationId}/completion`, {
@@ -1247,6 +1300,22 @@ class ClaudeMessage {
 		);
 	}
 
+	// Returns only files that will land in files_completion (subject to the
+	// per-message limit). Mirrors the classification in _getFilesJSON so the
+	// two cannot drift.
+	_getCompletionFiles() {
+		const ATTACHMENT_CHAR_LIMIT = 15000;
+		return this._files.filter(f => {
+			if (f instanceof ClaudeAttachment) return false;
+			if (f instanceof ClaudeCodeExecutionFile) {
+				const inlined = f.extracted_content !== null &&
+					(f.force_attachment_mode || f.extracted_content.length <= ATTACHMENT_CHAR_LIMIT);
+				return !inlined;
+			}
+			return true; // ClaudeFile
+		});
+	}
+
 	_getFilesJSON() {
 		const ATTACHMENT_CHAR_LIMIT = 15000;
 		const files_v2 = [];
@@ -1826,6 +1895,23 @@ function getProjectId() {
 }
 
 // ======== Style API ========
+
+// Resolves the user's currently-selected global style to the full style object
+// Claude's completion endpoint expects. Returns null if no style is selected or
+// the selected key no longer exists. Swallows errors — callers get null and
+// fall back to no-style behavior.
+async function getCurrentUserStyle(orgId) {
+	try {
+		const raw = localStorage.getItem('LSS-claude_personalized_style');
+		const key = raw ? JSON.parse(raw)?.value?.styleKey : null;
+		if (!key) return null;
+		const { defaultStyles = [], customStyles = [] } = await listStyles(orgId);
+		return [...defaultStyles, ...customStyles].find(s => s.key === key || s.uuid === key) ?? null;
+	} catch (e) {
+		console.warn('getCurrentUserStyle failed:', e);
+		return null;
+	}
+}
 
 async function listStyles(orgId) {
 	const response = await fetch(`/api/organizations/${orgId}/list_styles`);
