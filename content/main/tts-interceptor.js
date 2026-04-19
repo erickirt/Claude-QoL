@@ -213,7 +213,7 @@
 
 				await conversation.create('TTS Actor Analysis', FAST_MODEL, null, false);
 
-				const response = await conversation.sendMessageAndWaitForResponse(prompt, { model: FAST_MODEL });
+				const response = await conversation.sendMessageAndWaitForResponse(prompt, { model: FAST_MODEL, applyCurrentStyle: false });
 
 				let responseText = ClaudeConversation.extractMessageText(response);
 

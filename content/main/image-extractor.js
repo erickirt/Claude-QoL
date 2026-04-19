@@ -140,7 +140,7 @@ window.fetch = async (...args) => {
 				}
 
 				if (insertions.length > 0) {
-					console.log('[ImageExtractor] Final content array for message', msg.uuid, JSON.parse(JSON.stringify(content)));
+					//console.log('[ImageExtractor] Final content array for message', msg.uuid, JSON.parse(JSON.stringify(content)));
 				}
 			}
 		}
