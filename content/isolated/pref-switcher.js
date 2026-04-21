@@ -421,7 +421,7 @@
 			createFn: createPresetButton,
 			tooltip: 'Preferences preset: None',
 			forceDisplayOnMobile: true,
-			pages: ['chat', 'home', 'project', 'coworkChat', 'coworkHome'],
+			pages: ['chat', 'home', 'coworkChat', 'coworkHome'],
 			onInjected: () => updatePresetButtonAppearance(),
 		});
 

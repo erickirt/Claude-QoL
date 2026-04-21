@@ -982,7 +982,7 @@ const pageLayouts = {
 			const nativeActions = document.querySelector('.flex.items-center.gap-1.ml-auto');
 			if (!nativeActions) return null;
 			const starWrapper = nativeActions.querySelector('[data-state]');
-			return { parent: nativeActions, referenceNode: starWrapper || null, mode: 'inline' };
+			return { parent: nativeActions, referenceNode: starWrapper?.parentElement || null, mode: 'inline' };
 		},
 	},
 };
