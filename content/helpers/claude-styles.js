@@ -308,6 +308,60 @@ function showClaudeThreeOption(title, message, options) {
 	});
 }
 
+async function promptForSettingsMismatch(sourceSettings) {
+	const account = await getAccountSettings();
+	const current = account.settings || account;
+
+	const desiredArtifacts = sourceSettings?.preview_feature_uses_artifacts === true;
+	const desiredCE = sourceSettings?.enabled_monkeys_in_a_barrel === true;
+	const currentArtifacts = current.preview_feature_uses_artifacts === true;
+	const currentCE = current.enabled_monkeys_in_a_barrel === true;
+
+	const artifactsMismatch = desiredArtifacts !== currentArtifacts;
+	const ceMismatch = desiredCE !== currentCE;
+
+	if (!artifactsMismatch && !ceMismatch) {
+		return {
+			preview_feature_uses_artifacts: currentArtifacts,
+			enabled_monkeys_in_a_barrel: currentCE,
+		};
+	}
+
+	const mismatches = [];
+	if (artifactsMismatch) {
+		mismatches.push(`Artifacts: Originally ${desiredArtifacts ? 'ON' : 'OFF'} | Currently ${currentArtifacts ? 'ON' : 'OFF'}`);
+	}
+	if (ceMismatch) {
+		mismatches.push(`Code Execution: Originally ${desiredCE ? 'ON' : 'OFF'} | Currently ${currentCE ? 'ON' : 'OFF'}`);
+	}
+
+	const result = await showClaudeThreeOption(
+		'Settings Mismatch',
+		`Source conversation has different settings:\n${mismatches.join('\n')}\n\nWhat would you like to do?`,
+		{
+			left: { text: 'Cancel', variant: 'secondary' },
+			middle: { text: 'Continue anyway', variant: 'secondary' },
+			right: { text: 'Switch to match', variant: 'primary' }
+		}
+	);
+
+	if (result === 'left') {
+		throw new Error('USER_CANCELLED');
+	}
+
+	if (result === 'middle') {
+		return {
+			preview_feature_uses_artifacts: currentArtifacts,
+			enabled_monkeys_in_a_barrel: currentCE,
+		};
+	}
+
+	return {
+		preview_feature_uses_artifacts: desiredArtifacts,
+		enabled_monkeys_in_a_barrel: desiredCE,
+	};
+}
+
 // Full-featured prompt with all options
 function showClaudePrompt(title, message, placeholder = '', defaultValue = '', onValidate = null) {
 	return new Promise((resolve, reject) => {

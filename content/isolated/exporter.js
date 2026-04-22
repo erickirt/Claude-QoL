@@ -840,13 +840,10 @@
 	}
 
 	async function finalizeImport(name, messages, model, zipFiles = null, loadingModal = null, settings = null) {
-		// Create the conversation first (needed for correct file upload routing)
-		let conversation = new ClaudeConversation(getOrgId());
-		await conversation.create(name, model);
+		const accountFeatureSettings = await promptForSettingsMismatch(settings);
 
-		// Ensure settings match source (defaults to OFF for old exports without settings)
-		const { conversation: conv, restoreSettings } = await ensureSettingsState(conversation, settings);
-		conversation = conv;
+		const conversation = new ClaudeConversation(getOrgId());
+		conversation.prepareNew(name, model, null, accountFeatureSettings);
 
 		// Build import message tied to real conversation
 		const importMessage = new ClaudeMessage(conversation);
@@ -898,7 +895,6 @@
 
 		// Send initial message
 		await conversation.sendMessageAndWaitForResponse(importMessage);
-		await restoreSettings();
 
 		// Convert and store phantom messages
 		const phantomMessages = convertToPhantomMessages(messages);

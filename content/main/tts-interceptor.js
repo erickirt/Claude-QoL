@@ -210,8 +210,7 @@
 			try {
 				const orgId = getOrgId();
 				const conversation = new ClaudeConversation(orgId);
-
-				await conversation.create('TTS Actor Analysis', FAST_MODEL, null, false);
+				conversation.prepareNew('TTS Actor Analysis', FAST_MODEL, null, null);
 
 				const response = await conversation.sendMessageAndWaitForResponse(prompt, { model: FAST_MODEL, applyCurrentStyle: false });
 

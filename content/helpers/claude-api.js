@@ -179,36 +179,35 @@ class ClaudeConversation {
 		this.conversationId = conversationId;
 		this.created = conversationId ? true : false;
 		this.lastGetDataFromCache = false;
+		this.accountFeatureSettings = null;
+		this._pendingCreateParams = null;
 	}
 
-	// Create a new conversation
-	async create(name, model = null, projectUuid = null, paprikaMode = false) {
+	// Prepare a new conversation locally. No server call — actual creation
+	// happens on the first sendMessageAndWaitForResponse via create_conversation_params.
+	prepareNew(name, model = null, projectUuid = null, accountFeatureSettings = null) {
 		if (this.conversationId) {
 			throw new Error('Conversation already exists');
 		}
 
 		this.conversationId = this.generateUuid();
-		const bodyJSON = {
-			uuid: this.conversationId,
-			name: name,
+		this.accountFeatureSettings = accountFeatureSettings;
+
+		this._pendingCreateParams = {
 			include_conversation_preferences: true,
-			project_uuid: projectUuid,
+			is_temporary: false,
+			name: name || '',
+		};
+		if (model) this._pendingCreateParams.model = model;
+
+		this.conversationData = {
+			uuid: this.conversationId,
+			name: name || '',
+			model: model,
+			chat_messages: [],
+			project: projectUuid ? { uuid: projectUuid } : null,
 		};
 
-		if (model) bodyJSON.model = model;
-		if (paprikaMode) bodyJSON.paprika_mode = "extended";
-
-		const response = await fetch(`/api/organizations/${this.orgId}/chat_conversations`, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify(bodyJSON)
-		});
-
-		if (!response.ok) {
-			throw new Error('Failed to create conversation');
-		}
-
-		this.created = true;
 		return this.conversationId;
 	}
 
@@ -300,89 +299,133 @@ class ClaudeConversation {
 		return this._postCompletionAndAwaitAssistant(finalBody);
 	}
 
-	async _postCompletionAndAwaitAssistant(requestBody) {
-		const requestSentTime = new Date().toISOString();
+	async _patchAccountSettingsIfNeeded() {
+		if (!this.accountFeatureSettings) return null;
 
-		const response = await fetch(`/api/organizations/${this.orgId}/chat_conversations/${this.conversationId}/completion`, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify(requestBody)
+		const account = await getAccountSettings();
+		const current = account.settings || account;
+
+		const desired = this.accountFeatureSettings;
+		const needsPatch =
+			(desired.preview_feature_uses_artifacts !== (current.preview_feature_uses_artifacts === true)) ||
+			(desired.enabled_monkeys_in_a_barrel !== (current.enabled_monkeys_in_a_barrel === true));
+
+		if (!needsPatch) return null;
+
+		await updateAccountSettings({
+			preview_feature_uses_artifacts: desired.preview_feature_uses_artifacts,
+			enabled_monkeys_in_a_barrel: desired.enabled_monkeys_in_a_barrel,
 		});
 
-		if (!response.ok) {
-			console.error(await response.json());
-			throw new Error('Failed to send message');
-		}
+		return {
+			preview_feature_uses_artifacts: current.preview_feature_uses_artifacts === true,
+			enabled_monkeys_in_a_barrel: current.enabled_monkeys_in_a_barrel === true,
+		};
+	}
 
-		// Consume the stream, extracting the response UUID from the message_start event
-		const reader = response.body.getReader();
-		const decoder = new TextDecoder();
-		let responseUuid = null;
+	async _postCompletionAndAwaitAssistant(requestBody) {
+		let settingsToRestore = null;
+
+		if (!this.created) {
+			if (this._pendingCreateParams) {
+				requestBody.create_conversation_params = { ...this._pendingCreateParams };
+			}
+			settingsToRestore = await this._patchAccountSettingsIfNeeded();
+		}
 
 		try {
-			while (true) {
-				const { done, value } = await reader.read();
-				if (done) break;
+			const requestSentTime = new Date().toISOString();
 
-				const chunk = decoder.decode(value, { stream: true });
-				console.log('Received chunk:', chunk);
+			const response = await fetch(`/api/organizations/${this.orgId}/chat_conversations/${this.conversationId}/completion`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(requestBody)
+			});
 
-				// Extract response UUID from the message_start event
-				if (!responseUuid && chunk.includes('"type":"message_start"')) {
-					const lines = chunk.split('\n');
-					for (const line of lines) {
-						const trimmed = line.trim();
-						if (trimmed.startsWith('data: ') && trimmed.includes('"message_start"')) {
-							try {
-								const parsed = JSON.parse(trimmed.substring(6));
-								responseUuid = parsed.message?.uuid;
-								console.log('Got response UUID from message_start:', responseUuid);
-							} catch (e) {
-								console.warn('Failed to parse message_start data:', e);
+			if (!response.ok) {
+				console.error(await response.json());
+				throw new Error('Failed to send message');
+			}
+
+			if (!this.created) {
+				this.created = true;
+				this._pendingCreateParams = null;
+			}
+
+			// Consume the stream, extracting the response UUID from the message_start event
+			const reader = response.body.getReader();
+			const decoder = new TextDecoder();
+			let responseUuid = null;
+
+			try {
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) break;
+
+					const chunk = decoder.decode(value, { stream: true });
+					console.log('Received chunk:', chunk);
+
+					// Extract response UUID from the message_start event
+					if (!responseUuid && chunk.includes('"type":"message_start"')) {
+						const lines = chunk.split('\n');
+						for (const line of lines) {
+							const trimmed = line.trim();
+							if (trimmed.startsWith('data: ') && trimmed.includes('"message_start"')) {
+								try {
+									const parsed = JSON.parse(trimmed.substring(6));
+									responseUuid = parsed.message?.uuid;
+									console.log('Got response UUID from message_start:', responseUuid);
+								} catch (e) {
+									console.warn('Failed to parse message_start data:', e);
+								}
+								break;
 							}
-							break;
 						}
 					}
-				}
 
-				if (chunk.includes('event: message_stop')) {
-					break;
+					if (chunk.includes('event: message_stop')) {
+						break;
+					}
 				}
+			} finally {
+				reader.releaseLock();
 			}
+
+			// Find the assistant response by UUID (or fall back to timestamp)
+			let assistantMessage;
+			let attempts = 0;
+			let messages;
+			const maxAttempts = 30;
+
+			while (!assistantMessage && attempts < maxAttempts) {
+				if (attempts > 0) {
+					console.log(`Assistant message not found, waiting 3 seconds and retrying (attempt ${attempts}/${maxAttempts})...`);
+					await new Promise(r => setTimeout(r, 3000));
+				}
+				messages = await this.getMessages(false, true);
+				if (responseUuid) {
+					assistantMessage = messages.find(msg => msg.uuid === responseUuid);
+				} else {
+					assistantMessage = messages.find(msg =>
+						msg.sender === 'assistant' &&
+						msg.created_at > requestSentTime
+					);
+				}
+				attempts++;
+			}
+
+			if (!assistantMessage) {
+				console.error('Messages after retry:', messages);
+				console.error('Response UUID:', responseUuid, 'requestSentTime:', requestSentTime);
+				throw new Error('Completion finished but no assistant message found after retry');
+			}
+
+			return assistantMessage;
 		} finally {
-			reader.releaseLock();
-		}
-
-		// Find the assistant response by UUID (or fall back to timestamp)
-		let assistantMessage;
-		let attempts = 0;
-		let messages;
-		const maxAttempts = 30;
-
-		while (!assistantMessage && attempts < maxAttempts) {
-			if (attempts > 0) {
-				console.log(`Assistant message not found, waiting 3 seconds and retrying (attempt ${attempts}/${maxAttempts})...`);
-				await new Promise(r => setTimeout(r, 3000));
+			if (settingsToRestore) {
+				await updateAccountSettings(settingsToRestore);
 			}
-			messages = await this.getMessages(false, true);
-			if (responseUuid) {
-				assistantMessage = messages.find(msg => msg.uuid === responseUuid);
-			} else {
-				assistantMessage = messages.find(msg =>
-					msg.sender === 'assistant' &&
-					msg.created_at > requestSentTime
-				);
-			}
-			attempts++;
 		}
-
-		if (!assistantMessage) {
-			console.error('Messages after retry:', messages);
-			console.error('Response UUID:', responseUuid, 'requestSentTime:', requestSentTime);
-			throw new Error('Completion finished but no assistant message found after retry');
-		}
-
-		return assistantMessage;
 	}
 
 	// Upload file to code execution environment
@@ -425,9 +468,24 @@ class ClaudeConversation {
 		return new ClaudeCodeExecutionFile(result, this.orgId, this.conversationId);
 	}
 
+
+	_syncAccountFeatureSettings() {
+		const s = this.conversationData?.settings;
+		if (s) {
+			this.accountFeatureSettings = {
+				preview_feature_uses_artifacts: s.preview_feature_uses_artifacts === true,
+				enabled_monkeys_in_a_barrel: s.enabled_monkeys_in_a_barrel === true,
+			};
+		}
+	}
+
 	// Lazy load conversation data (always fetches full tree)
 	// Uses IndexedDB cache with streaming freshness check to avoid downloading large payloads
 	async getData(forceRefresh = false) {
+		if (!this.created) {
+			return this.conversationData;
+		}
+
 		if (this.conversationData && !forceRefresh) {
 			return this.conversationData;
 		}
@@ -443,6 +501,7 @@ class ClaudeConversation {
 					const freshData = await this._streamingFreshnessCheck(apiUrl, cachedEntry);
 					if (freshData) {
 						this.conversationData = freshData;
+						this._syncAccountFeatureSettings();
 						return this.conversationData;
 					}
 				}
@@ -455,9 +514,14 @@ class ClaudeConversation {
 		this.lastGetDataFromCache = false;
 		const response = await fetch(apiUrl);
 		if (!response.ok) {
+			if (response.status === 404 && this.conversationData) {
+				console.error('getData: 404 on conversation that should exist, falling back to local data');
+				return this.conversationData;
+			}
 			throw new Error('Failed to get conversation data');
 		}
 		this.conversationData = await response.json();
+		this._syncAccountFeatureSettings();
 
 		// Write to cache (fire-and-forget)
 		if (this.conversationData.updated_at) {
@@ -1160,8 +1224,7 @@ class ClaudeMessage {
 	}
 
 	async addFile(input, filename = null, forceAttachmentMode = false) {
-		const data = await this.conversation.getData();
-		const codeExecutionEnabled = data.settings?.enabled_monkeys_in_a_barrel === true;
+		const codeExecutionEnabled = this.conversation.accountFeatureSettings?.enabled_monkeys_in_a_barrel === true;
 
 		// Let's make sure the input blob isn't a text file first...
 		if (input instanceof Blob) {
@@ -1711,92 +1774,6 @@ async function updateAccountSettings(settings) {
 	});
 	if (!response.ok) throw new Error('Failed to update account settings');
 	return await response.json();
-}
-
-/**
- * Ensures a conversation has the desired settings (artifacts and code execution).
- * If there's a mismatch, prompts user to cancel, continue anyway, or switch.
- *
- * @param {ClaudeConversation} conversation - The newly created conversation
- * @param {Object} desiredSettings - The desired settings object from source conversation
- * @param {boolean} forceSwitch - If true, skip user prompt and always switch to desired settings
- * @returns {Promise<{conversation: ClaudeConversation, restoreSettings: (() => Promise<void>) | null}>}
- *          conversation: The conversation (same or recreated)
- *          restoreSettings: Call after first message to restore original account settings (null if not needed)
- * @throws {Error} USER_CANCELLED if user cancels (only when forceSwitch is false)
- */
-// Notable gotcha: A conversation which has no messages will continue to exist in "limbo" until the first message is sent, changing settings to match the account-wide ones.
-// This is why delaying the restoreSettings call until after the first message is important.
-async function ensureSettingsState(conversation, desiredSettings, forceSwitch = false) {
-	const convData = await conversation.getData();
-	const currentSettings = convData.settings || {};
-
-	// Extract relevant settings (default to false if missing)
-	const desiredArtifacts = desiredSettings?.preview_feature_uses_artifacts === true;
-	const desiredCE = desiredSettings?.enabled_monkeys_in_a_barrel === true;
-	const currentArtifacts = currentSettings.preview_feature_uses_artifacts === true;
-	const currentCE = currentSettings.enabled_monkeys_in_a_barrel === true;
-
-	// Check what differs
-	const artifactsMismatch = desiredArtifacts !== currentArtifacts;
-	const ceMismatch = desiredCE !== currentCE;
-
-	// If not forcing and no mismatch, return early
-	if (!forceSwitch && !artifactsMismatch && !ceMismatch) {
-		return { conversation, restoreSettings: async () => { } };
-	}
-
-	// If not forcing, prompt user for action
-	if (!forceSwitch) {
-		// Build mismatch description
-		const mismatches = [];
-		if (artifactsMismatch) {
-			mismatches.push(`Artifacts: Originally ${desiredArtifacts ? 'ON' : 'OFF'} | Currently ${currentArtifacts ? 'ON' : 'OFF'}`);
-		}
-		if (ceMismatch) {
-			mismatches.push(`Code Execution: Originally ${desiredCE ? 'ON' : 'OFF'} | Currently ${currentCE ? 'ON' : 'OFF'}`);
-		}
-
-		const result = await showClaudeThreeOption(
-			'Settings Mismatch',
-			`Source conversation has different settings:\n${mismatches.join('\n')}\n\nWhat would you like to do?`,
-			{
-				left: { text: 'Cancel', variant: 'secondary' },
-				middle: { text: 'Continue anyway', variant: 'secondary' },
-				right: { text: 'Switch to match', variant: 'primary' }
-			}
-		);
-
-		if (result === 'left') {
-			await conversation.delete();
-			throw new Error('USER_CANCELLED');
-		}
-
-		if (result === 'middle') {
-			return { conversation, restoreSettings: async () => { } };
-		}
-		// result === 'right' falls through to switch logic below
-	}
-
-	// Switch logic: delete conversation, apply settings, recreate
-	await conversation.delete();
-	await updateAccountSettings({
-		preview_feature_uses_artifacts: desiredArtifacts,
-		enabled_monkeys_in_a_barrel: desiredCE
-	});
-	// Create new conversation with correct settings (still in "limbo" until first message)
-	const newConversation = new ClaudeConversation(conversation.orgId);
-	await newConversation.create(convData.name, convData.model, convData.project?.uuid);
-	// Return cleanup function - caller must invoke after first message to restore settings
-	return {
-		conversation: newConversation,
-		restoreSettings: async () => {
-			await updateAccountSettings({
-				preview_feature_uses_artifacts: currentArtifacts,
-				enabled_monkeys_in_a_barrel: currentCE
-			});
-		}
-	};
 }
 
 async function downloadFile(url) {

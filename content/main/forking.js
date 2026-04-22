@@ -570,12 +570,10 @@ If this is a writing or creative discussion, include sections for characters, pl
 		const newName = `Fork of ${chatName}`;
 		const model = pendingFork.model;
 
-		let conversation = new ClaudeConversation(orgId);
-		await conversation.create(newName, model, projectUuid);
+		const settings = await promptForSettingsMismatch(pendingFork.sourceSettings);
 
-		// Ensure settings match source conversation
-		const { conversation: conv, restoreSettings } = await ensureSettingsState(conversation, pendingFork.sourceSettings);
-		conversation = conv;
+		const conversation = new ClaudeConversation(orgId);
+		conversation.prepareNew(newName, model, projectUuid, settings);
 
 		await storePhantomMessagesAndWait(conversation.conversationId, ClaudeConversation.cleanupMessages(messages, conversation));
 
@@ -629,7 +627,6 @@ If this is a writing or creative discussion, include sections for characters, pl
 		// Figure out why we get redirected before the message is visible
 		// Despite waiting for assistant completion. For now, idk. Maybe add a delay? TODO: Test more.
 		await conversation.sendMessageAndWaitForResponse(forkMessage);
-		await restoreSettings();
 
 		await new Promise(r => setTimeout(r, 5000));
 
@@ -1000,15 +997,11 @@ If this is a writing or creative discussion, include sections for characters, pl
 		// Create temp conversation
 		const summaryConvoName = `Temp_Summary_${Date.now()}`;
 		const summaryModel = pendingFork.useSelectedModelForSummary ? pendingFork.model : FAST_MODEL;
-		const tempConversation = new ClaudeConversation(orgId);
-		await tempConversation.create(summaryConvoName, summaryModel, null);
-
-		// Force disable artifacts and code execution for text-only summaries
-		const { conversation: summaryConv, restoreSettings } = await ensureSettingsState(
-			tempConversation,
-			{ preview_feature_uses_artifacts: false, enabled_monkeys_in_a_barrel: false },
-			true  // forceSwitch
-		);
+		const summaryConv = new ClaudeConversation(orgId);
+		summaryConv.prepareNew(summaryConvoName, summaryModel, null, {
+			preview_feature_uses_artifacts: false,
+			enabled_monkeys_in_a_barrel: false,
+		});
 
 		try {
 			// ===== PHASE 1: Calculate chunk boundaries (work backwards) =====
@@ -1017,7 +1010,6 @@ If this is a writing or creative discussion, include sections for characters, pl
 			// ===== PHASE 2: Generate summaries (work forwards) =====
 			const summaryTexts = [];
 			let processedTokens = 0;
-			let settingsRestored = false;
 			for (const chunk of chunks) {
 				processedTokens += estimateTokens(chunk);
 				const summaryText = await generateSummaryForChunk(
@@ -1025,10 +1017,6 @@ If this is a writing or creative discussion, include sections for characters, pl
 					chunk,
 					summaryTexts
 				);
-				if (!settingsRestored) {
-					await restoreSettings();
-					settingsRestored = true;
-				}
 
 				if (pendingFork.loadingModal) {
 					pendingFork.loadingModal.setContent(
@@ -1092,7 +1080,6 @@ If this is a writing or creative discussion, include sections for characters, pl
 			return syntheticMessages;
 		} finally {
 			await summaryConv.delete();
-			await restoreSettings(); // Just in case
 		}
 	}
 
