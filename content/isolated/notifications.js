@@ -366,12 +366,7 @@ class QoLNotifications {
 	}
 
 	async checkForRateReminder() {
-		// TODO: restore actual logic after testing
-		const notificationCard = new RateNotificationCard();
-		notificationCard.show();
-		return;
-
-		/*const rateReminderTime = await settingsRegistry.get(SETTINGS_KEYS.NOTIFICATIONS.RATE_REMINDER_TIME);
+		const rateReminderTime = await settingsRegistry.get(SETTINGS_KEYS.NOTIFICATIONS.RATE_REMINDER_TIME);
 
 		if (!rateReminderTime) {
 			await settingsRegistry.set(SETTINGS_KEYS.NOTIFICATIONS.RATE_REMINDER_TIME, Date.now() + 8 * 24 * 60 * 60 * 1000);
@@ -385,7 +380,7 @@ class QoLNotifications {
 		await settingsRegistry.set(SETTINGS_KEYS.NOTIFICATIONS.RATE_REMINDER_SHOWN, true);
 
 		const notificationCard = new RateNotificationCard();
-		notificationCard.show();*/
+		notificationCard.show();
 	}
 }
 
