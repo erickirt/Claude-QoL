@@ -1,4 +1,2 @@
-Rework forking for better control
-Make forking much more reliable
-Fix navigation/search
-Fix MIME type bug (@rqhu1995)
+Fix project export
+Move to new conversation creation flow for the API
