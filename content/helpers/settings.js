@@ -44,6 +44,8 @@ const SETTINGS_KEYS = {
 	},
 	NOTIFICATIONS: {
 		PREVIOUS_VERSION: { key: 'qolPreviousVersion', default: null, type: 'string' },
+		RATE_REMINDER_TIME: { key: 'qolRateReminderTime', default: null, type: 'number' },
+		RATE_REMINDER_SHOWN: { key: 'qolRateReminderShown', default: false, type: 'boolean' },
 	},
 	PREF_SWITCHER: {
 		PRESETS: { key: 'preference_presets', default: {}, type: 'object' },

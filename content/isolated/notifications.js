@@ -183,6 +183,27 @@ class FloatingCard {
 		this.cleanup = makeDraggable(this.element, dragHandle);
 	}
 
+	addImageButton(href, imageFile, alt) {
+		const link = document.createElement('a');
+		link.href = href;
+		link.target = '_blank';
+		link.className = 'qol-block qol-text-center';
+		link.style.marginTop = '10px';
+
+		const img = document.createElement('img');
+		img.src = chrome.runtime.getURL(imageFile);
+		img.height = 36;
+		img.style.border = '0';
+		img.alt = alt;
+		link.appendChild(img);
+
+		this.element.appendChild(link);
+	}
+
+	addKofiButton() {
+		this.addImageButton('https://ko-fi.com/R6R14IUBY', 'kofi-button.png', 'Buy Me a Coffee at ko-fi.com');
+	}
+
 	remove() {
 		if (this.cleanup) {
 			this.cleanup();
@@ -256,21 +277,43 @@ class VersionNotificationCard extends FloatingCard {
 		this.makeCardDraggable(dragHandle);
 	}
 
-	addKofiButton() {
-		const kofiButton = document.createElement('a');
-		kofiButton.href = 'https://ko-fi.com/R6R14IUBY';
-		kofiButton.target = '_blank';
-		kofiButton.className = 'qol-block qol-text-center';
-		kofiButton.style.marginTop = '10px';
+}
 
-		const kofiImg = document.createElement('img');
-		kofiImg.src = chrome.runtime.getURL('kofi-button.png');
-		kofiImg.height = 36;
-		kofiImg.style.border = '0';
-		kofiImg.alt = 'Buy Me a Coffee at ko-fi.com';
-		kofiButton.appendChild(kofiImg);
+// Rate extension notification card
+class RateNotificationCard extends FloatingCard {
+	constructor() {
+		super();
+		this.element.classList.add('qol-text-center');
+		this.element.style.maxWidth = '280px';
+		this.build();
+	}
 
-		this.element.appendChild(kofiButton);
+	build() {
+		const dragHandle = document.createElement('div');
+		dragHandle.className = 'border-b border-border-400 qol-header';
+		dragHandle.textContent = 'Claude QoL';
+
+		const message = document.createElement('div');
+		message.className = 'qol-mb-2';
+		message.textContent = 'Enjoying Claude QoL?';
+
+		const supportMessage = document.createElement('div');
+		supportMessage.className = 'qol-mb-2';
+		supportMessage.style.fontWeight = 'bold';
+		supportMessage.textContent = 'Consider leaving a rating!';
+
+		this.element.appendChild(dragHandle);
+		this.element.appendChild(message);
+		this.element.appendChild(supportMessage);
+
+		const isChrome = !!window.chrome && (!!window.chrome.webstore || !!window.chrome.runtime);
+		const rateUrl = isChrome
+			? 'https://chromewebstore.google.com/detail/claude-qol/dkdnancajokhfclpjpplkhlkbhaeejob'
+			: 'https://addons.mozilla.org/en-US/firefox/addon/claude-qol/';
+		this.addImageButton(rateUrl, 'rate-badge.png', 'Rate this extension');
+
+		this.addCloseButton();
+		this.makeCardDraggable(dragHandle);
 	}
 }
 
@@ -284,6 +327,7 @@ class QoLNotifications {
 		// Delay to allow page to load
 		await new Promise(resolve => setTimeout(resolve, 1000));
 		await this.checkForVersionUpdate();
+		await this.checkForRateReminder();
 	}
 
 	async checkForVersionUpdate() {
@@ -319,6 +363,29 @@ class QoLNotifications {
 
 		const notificationCard = new VersionNotificationCard(previousVersion, currentVersion, patchHighlights);
 		notificationCard.show();
+	}
+
+	async checkForRateReminder() {
+		// TODO: restore actual logic after testing
+		const notificationCard = new RateNotificationCard();
+		notificationCard.show();
+		return;
+
+		/*const rateReminderTime = await settingsRegistry.get(SETTINGS_KEYS.NOTIFICATIONS.RATE_REMINDER_TIME);
+
+		if (!rateReminderTime) {
+			await settingsRegistry.set(SETTINGS_KEYS.NOTIFICATIONS.RATE_REMINDER_TIME, Date.now() + 8 * 24 * 60 * 60 * 1000);
+			return;
+		}
+
+		const rateReminderShown = await settingsRegistry.get(SETTINGS_KEYS.NOTIFICATIONS.RATE_REMINDER_SHOWN);
+		if (rateReminderShown) return;
+		if (Date.now() < rateReminderTime) return;
+
+		await settingsRegistry.set(SETTINGS_KEYS.NOTIFICATIONS.RATE_REMINDER_SHOWN, true);
+
+		const notificationCard = new RateNotificationCard();
+		notificationCard.show();*/
 	}
 }
 

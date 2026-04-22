@@ -89,6 +89,7 @@
 		{
 			"resources": [
 				"kofi-button.png",
+				"rate-badge.png",
 				"update_patchnotes.txt",
 				"html_template/export-template.css",
 				"html_template/export-template.js"
