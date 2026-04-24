@@ -1169,11 +1169,6 @@
 			settingsRegistry.set(T.BASE_URL, settings.openaiBaseUrl)
 		]);
 	}
-
-	function getConversationId() {
-		const match = window.location.pathname.match(/\/(?:chat|claude-code-desktop|local_sessions)\/([^/?]+)/);
-		return match ? match[1] : null;
-	}
 	//#endregion
 
 	//#region Settings Button
