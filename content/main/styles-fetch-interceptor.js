@@ -89,25 +89,23 @@
                         requestId: requestId
                     }, '*');
                     
-                    // Timeout after 100ms to not slow down requests
+                    // Timeout after 500ms to not slow down requests
                     setTimeout(() => {
                         window.removeEventListener('message', listener);
                         resolve(null);
-                    }, 100);
+                    }, 500);
                 });
 
                 if (styleData) {
                     try {
                         const bodyJSON = JSON.parse(config.body);
-                        
+
                         if (styleData.type !== 'none') {
-                            // Replace with custom style
                             bodyJSON.personalized_styles = [styleData];
                         } else {
-                            // "Use current" selected - send empty array
                             bodyJSON.personalized_styles = [];
                         }
-                        
+
                         config.body = JSON.stringify(bodyJSON);
                     } catch (error) {
                         console.error('Error modifying request:', error);

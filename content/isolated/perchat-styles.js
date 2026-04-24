@@ -3,12 +3,28 @@
 	'use strict';
 
 	const _PCSTYLE = SETTINGS_KEYS.PERCHAT_STYLES.STYLES;
+	const _PPSTYLE = SETTINGS_KEYS.PERPROJECT_STYLES.STYLES;
+
+	function getProjectFromDOM() {
+		const link = document.querySelector('a[href^="/project/"]');
+		if (!link) return null;
+		const match = link.getAttribute('href').match(/\/project\/([a-f0-9-]+)/);
+		return match ? { id: match[1], name: link.textContent.trim() } : null;
+	}
 
 	// Listen for messages from fetch interceptor
 	window.addEventListener('message', async (event) => {
 		if (event.data.type === 'perchat-style-request') {
 			const { conversationId, requestId } = event.data;
-			const style = await settingsRegistry.getPerChat(_PCSTYLE, conversationId);
+			const projectInfo = getProjectFromDOM();
+
+			const lookups = [settingsRegistry.getPerChat(_PCSTYLE, conversationId)];
+			if (projectInfo) {
+				lookups.push(settingsRegistry.getPerChat(_PPSTYLE, projectInfo.id));
+			}
+			const results = await Promise.all(lookups);
+			const chatStyle = results[0];
+			const style = (chatStyle?.key === 'use-current') ? null : (chatStyle || results[1] || null);
 
 			window.postMessage({
 				type: 'perchat-style-response',
@@ -21,20 +37,23 @@
 
 			if (conversationId) {
 				const currentStyle = await settingsRegistry.getPerChat(_PCSTYLE, conversationId);
-
 				if (currentStyle && (currentStyle.uuid === deletedStyleId || currentStyle.key === deletedStyleId)) {
 					await settingsRegistry.removePerChat(_PCSTYLE, conversationId);
-					await updateButtonAppearance();
 				}
 			}
+
+			const projectInfo = getProjectFromDOM();
+			const projectId = projectInfo?.id || getProjectId();
+			if (projectId) {
+				const projectStyle = await settingsRegistry.getPerChat(_PPSTYLE, projectId);
+				if (projectStyle && (projectStyle.uuid === deletedStyleId || projectStyle.key === deletedStyleId)) {
+					await settingsRegistry.removePerChat(_PPSTYLE, projectId);
+				}
+			}
+
+			await updateButtonAppearance();
 		}
 	});
-
-	// ======== UTILITY FUNCTIONS ========
-	function getConversationId() {
-		const match = window.location.pathname.match(/\/chat\/([^/?]+)/);
-		return match ? match[1] : null;
-	}
 
 	// ======== STYLE FETCHING ========
 	async function fetchAvailableStyles() {
@@ -100,57 +119,94 @@
 
 	async function showStyleModal() {
 		const conversationId = getConversationId();
-		if (!conversationId) {
-			console.error('No conversation ID found');
+		const projectId = getProjectId();
+		const projectInfo = getProjectFromDOM();
+
+		const isProjectPage = !!projectId && !conversationId;
+		const isProjectChat = !!conversationId && !!projectInfo;
+		const effectiveProjectId = isProjectPage ? projectId : projectInfo?.id;
+
+		if (!conversationId && !projectId) {
+			console.error('No conversation or project ID found');
 			return;
 		}
 
-		// Show loading modal immediately
 		const loadingModal = createLoadingModal('Loading styles...');
 		loadingModal.show();
 
 		try {
-			// Fetch styles in background
 			const styles = await fetchAvailableStyles();
 
-			// Get current selection
-			const currentStyle = await settingsRegistry.getPerChat(_PCSTYLE, conversationId);
-			const currentStyleId = currentStyle ? currentStyle.key : 'none';
+			let currentStyleId = 'none';
+			let projectOverride = null;
 
-			// Destroy loading modal
+			if (isProjectPage) {
+				const projectStyle = await settingsRegistry.getPerChat(_PPSTYLE, effectiveProjectId);
+				currentStyleId = projectStyle ? projectStyle.key : 'none';
+			} else {
+				const chatStyle = await settingsRegistry.getPerChat(_PCSTYLE, conversationId);
+				if (chatStyle && chatStyle.key === 'use-current' && !isProjectChat) {
+					currentStyleId = 'none';
+				} else {
+					currentStyleId = chatStyle ? chatStyle.key : 'none';
+				}
+				if (isProjectChat) {
+					projectOverride = await settingsRegistry.getPerChat(_PPSTYLE, projectInfo.id);
+				}
+			}
+
 			loadingModal.destroy();
 
-			// Build content for the modal
 			const contentContainer = document.createElement('div');
 
-			// Create select with options
-			const selectOptions = styles.map(style => ({
-				value: style.key,
-				label: style.name
-			}));
+			let selectOptions;
+			if (isProjectChat) {
+				selectOptions = [
+					{
+						value: 'none',
+						label: projectOverride ? `Use Project: ${projectOverride.name}` : 'Use Project'
+					},
+					{ value: 'use-current', label: 'Use current' },
+					...styles.filter(s => s.type !== 'none').map(s => ({ value: s.key, label: s.name }))
+				];
+			} else {
+				selectOptions = styles.map(s => ({ value: s.key, label: s.name }));
+			}
 
 			const select = createClaudeSelect(selectOptions, currentStyleId);
 			select.classList.add('mb-4');
 
-			// Info text
 			const infoText = document.createElement('div');
 			infoText.className = CLAUDE_CLASSES.TEXT_MUTED;
-			infoText.textContent = 'This style will override your default style for this chat only.';
+			if (isProjectPage) {
+				infoText.textContent = 'This style will override your default style for all chats in this project.';
+			} else if (isProjectChat) {
+				infoText.textContent = 'This style will override the project style for this chat only.';
+			} else {
+				infoText.textContent = 'This style will override your default style for this chat only.';
+			}
 
 			contentContainer.appendChild(select);
 			contentContainer.appendChild(infoText);
 
-			// Create and show the style modal
-			const modal = new ClaudeModal('Select Chat Style', contentContainer);
+			const modalTitle = isProjectPage ? 'Select Project Style' : 'Select Chat Style';
+			const modal = new ClaudeModal(modalTitle, contentContainer);
 			modal.addCancel();
 			modal.addConfirm('Apply', async () => {
 				const selectedUuid = select.value;
+				const settingsDef = isProjectPage ? _PPSTYLE : _PCSTYLE;
+				const entityId = isProjectPage ? effectiveProjectId : conversationId;
+
 				if (selectedUuid === 'none') {
-					await settingsRegistry.removePerChat(_PCSTYLE, conversationId);
+					await settingsRegistry.removePerChat(settingsDef, entityId);
+				} else if (selectedUuid === 'use-current') {
+					await settingsRegistry.setPerChat(_PCSTYLE, conversationId, {
+						type: 'none', key: 'use-current', name: 'Use current', uuid: 'use-current'
+					});
 				} else {
 					const selectedStyle = styles.find(s => s.key === selectedUuid);
 					if (selectedStyle && selectedStyle.type !== 'none') {
-						await settingsRegistry.setPerChat(_PCSTYLE, conversationId, selectedStyle);
+						await settingsRegistry.setPerChat(settingsDef, entityId, selectedStyle);
 					}
 				}
 
@@ -171,30 +227,56 @@
 		if (!button) return;
 
 		const conversationId = getConversationId();
-		if (!conversationId) return;
+		const projectId = getProjectId();
+		const projectInfo = getProjectFromDOM();
+		const isProjectPage = !!projectId && !conversationId;
+		const effectiveProjectId = isProjectPage ? projectId : projectInfo?.id;
 
-		const currentStyle = await settingsRegistry.getPerChat(_PCSTYLE, conversationId);
+		if (!conversationId && !projectId) return;
 
-		// Validate that the stored style still exists
-		if (currentStyle && currentStyle.type !== 'none') {
-			const availableStyles = await fetchAvailableStyles();
-			const styleStillExists = availableStyles.some(s => s.key === currentStyle.key);
+		let activeStyle = null;
+		let styleSource = null;
 
-			if (!styleStillExists) {
-				console.log(`Style "${currentStyle.name}" no longer exists, clearing selection`);
-				await settingsRegistry.removePerChat(_PCSTYLE, conversationId);
-				button.style.color = '';
-				button.tooltip?.updateText("Chat style: Use current");
-				return;
+		if (isProjectPage) {
+			activeStyle = await settingsRegistry.getPerChat(_PPSTYLE, effectiveProjectId);
+			styleSource = 'project';
+		} else if (conversationId) {
+			activeStyle = await settingsRegistry.getPerChat(_PCSTYLE, conversationId);
+			styleSource = 'chat';
+			if (!activeStyle && effectiveProjectId) {
+				activeStyle = await settingsRegistry.getPerChat(_PPSTYLE, effectiveProjectId);
+				styleSource = 'project';
 			}
 		}
 
-		if (currentStyle) {
-			button.style.color = '#0084ff';
-			button.tooltip?.updateText(`Chat style: ${currentStyle.name}`);
-		} else {
+		if (activeStyle && activeStyle.key === 'use-current') {
 			button.style.color = '';
 			button.tooltip?.updateText("Chat style: Use current");
+			return;
+		}
+
+		if (activeStyle && activeStyle.type !== 'none') {
+			const availableStyles = await fetchAvailableStyles();
+			const realStyles = availableStyles.filter(s => s.type !== 'none');
+			const styleStillExists = realStyles.length === 0 || realStyles.some(s => s.key === activeStyle.key);
+			if (!styleStillExists) {
+				console.log(`Style "${activeStyle.name}" no longer exists, clearing selection`);
+				if (styleSource === 'project') {
+					await settingsRegistry.removePerChat(_PPSTYLE, effectiveProjectId);
+				} else {
+					await settingsRegistry.removePerChat(_PCSTYLE, conversationId);
+				}
+				activeStyle = null;
+			}
+		}
+
+		const prefix = styleSource === 'project' ? 'Project style' : 'Chat style';
+		if (activeStyle) {
+			button.style.color = '#0084ff';
+			button.tooltip?.updateText(`${prefix}: ${activeStyle.name}`);
+		} else {
+			button.style.color = '';
+			button.tooltip?.updateText(`${prefix}: Use current`);
 		}
 	}
 
@@ -205,14 +287,17 @@
 			createFn: createStyleButton,
 			tooltip: 'Chat style: Use current',
 			forceDisplayOnMobile: true,
-			pages: ['chat'],
+			pages: ['chat', 'project'],
 			onInjected: () => updateButtonAppearance(),
 		});
 
 		let lastUrl = window.location.href;
+		let lastProjectId = null;
 		setInterval(async () => {
-			if (window.location.href !== lastUrl) {
+			const currentProjectId = getProjectFromDOM()?.id || getProjectId() || null;
+			if (window.location.href !== lastUrl || currentProjectId !== lastProjectId) {
 				lastUrl = window.location.href;
+				lastProjectId = currentProjectId;
 				await updateButtonAppearance();
 			}
 		}, 1000);
