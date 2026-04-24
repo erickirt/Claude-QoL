@@ -859,15 +859,33 @@ function createClaudeTooltip(element, tooltipText, deleteOnClick) {
 	tooltipWrapper.appendChild(tooltipContent);
 
 	// Add hover events
+	function checkTooltipParent() {
+		if (!element.isConnected) {
+			tooltipWrapper.remove();
+			return;
+		}
+		if (tooltipWrapper.style.display !== 'none') {
+			setTimeout(checkTooltipParent, 500);
+		}
+	}
+
 	element.addEventListener('mouseenter', () => {
 		tooltipWrapper.style.display = 'block';
 		const rect = element.getBoundingClientRect();
 		const tooltipRect = tooltipWrapper.getBoundingClientRect();
 		const centerX = rect.left + (rect.width / 2) - (tooltipRect.width / 2);
 		tooltipWrapper.style.transform = `translate(${centerX}px, ${rect.bottom + 5}px)`;
+		setTimeout(checkTooltipParent, 500);
 	});
 
 	element.addEventListener('mouseleave', () => {
+		tooltipWrapper.style.display = 'none';
+	});
+
+	tooltipWrapper.addEventListener('mouseenter', () => {
+		tooltipWrapper.style.display = 'none';
+	});
+	tooltipWrapper.addEventListener('pointerup', () => {
 		tooltipWrapper.style.display = 'none';
 	});
 
