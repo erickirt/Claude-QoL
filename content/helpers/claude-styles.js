@@ -1010,7 +1010,11 @@ const pageLayouts = {
 		getAnchor() {
 			const wiggle = document.querySelector('[data-testid="wiggle-controls-actions"]');
 			if (!wiggle) return null;
-			return { parent: wiggle.parentElement, referenceNode: null, mode: 'wiggle' };
+			const actionsSlot = wiggle.closest('#dframe-header-actions-slot');
+			if (actionsSlot) {
+				return { parent: actionsSlot.parentElement, referenceNode: actionsSlot, mode: 'inline' };
+			}
+			return { parent: wiggle.parentElement.parentElement, referenceNode: null, mode: 'wiggle' };
 		},
 	},
 	homeWeb: {

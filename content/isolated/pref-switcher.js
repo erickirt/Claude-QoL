@@ -420,7 +420,7 @@
 			buttonClass: 'preset-switcher-button',
 			createFn: createPresetButton,
 			tooltip: 'Preferences preset: None',
-			forceDisplayOnMobile: true,
+			forceDisplayOnMobile: false,
 			pages: ['chat', 'home', 'coworkChat', 'coworkHome'],
 			onInjected: () => updatePresetButtonAppearance(),
 		});
