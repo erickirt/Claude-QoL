@@ -997,6 +997,13 @@ const pageLayouts = {
 		getAnchor() {
 			const chatActions = document.querySelector('[data-testid="chat-actions"]');
 			if (!chatActions) return null;
+			const isMobile = window.innerHeight > window.innerWidth;
+			if (isMobile) {
+				const header = chatActions.closest('header');
+				if (header) {
+					return { parent: header, referenceNode: null, mode: 'inline' };
+				}
+			}
 			return { parent: chatActions.parentElement, referenceNode: chatActions, mode: 'inline' };
 		},
 	},
@@ -1013,6 +1020,10 @@ const pageLayouts = {
 			const actionsSlot = wiggle.closest('#dframe-header-actions-slot');
 			if (actionsSlot) {
 				return { parent: actionsSlot.parentElement, referenceNode: actionsSlot, mode: 'inline' };
+			}
+			const isMobile = window.innerHeight > window.innerWidth;
+			if (isMobile) {
+				return { parent: wiggle.parentElement, referenceNode: wiggle.nextElementSibling, mode: 'wiggle' };
 			}
 			return { parent: wiggle.parentElement.parentElement, referenceNode: null, mode: 'wiggle' };
 		},
@@ -1068,7 +1079,6 @@ const pageLayouts = {
 // Callers register buttons once; ButtonBar handles polling, injection, ordering, and mobile.
 const ButtonBar = {
 	BUTTON_PRIORITY: [
-		'image-expand-button',
 		'search-button',
 		'navigation-button',
 		'style-selector-button',
@@ -1166,11 +1176,23 @@ const ButtonBar = {
 			let container = anchor.parent.querySelector(':scope > .toolbox-buttons');
 			if (!container) {
 				container = document.createElement('div');
+				const isMobileChat = this._currentGroup === 'chat' && window.innerHeight > window.innerWidth;
 				if (anchor.mode === 'wiggle') {
-					container.className = 'toolbox-buttons absolute top-0 z-20 flex items-center gap-1';
-					container.style.height = '3rem';
+					if (isMobileChat) {
+						container.className = 'toolbox-buttons flex items-center gap-1 pointer-events-auto self-end px-3 z-20 bg-bg-100 rounded-bl-lg';
+						container.style.height = '2.25rem';
+						container.style.marginTop = '-4px';
+					} else {
+						container.className = 'toolbox-buttons absolute top-0 z-20 flex items-center gap-1';
+						container.style.height = '3rem';
+					}
 				} else {
-					container.className = 'toolbox-buttons flex items-center justify-end gap-1';
+					if (isMobileChat) {
+						container.className = 'toolbox-buttons absolute top-full right-0 flex items-center gap-1 px-3 z-20 bg-bg-100 rounded-bl-lg';
+						container.style.height = '2.25rem';
+					} else {
+						container.className = 'toolbox-buttons flex items-center justify-end gap-1';
+					}
 				}
 				if (anchor.referenceNode) {
 					anchor.parent.insertBefore(container, anchor.referenceNode);
@@ -1296,6 +1318,7 @@ const ButtonBar = {
 	},
 
 	_updateWigglePosition(anchor) {
+		if (window.innerHeight > window.innerWidth) return;
 		const wiggle = anchor.parent.querySelector('[data-testid="wiggle-controls-actions"]');
 		if (wiggle && this._container) {
 			this._container.style.right = (wiggle.offsetWidth + 4) + 'px';
