@@ -174,17 +174,11 @@
 	}
 
 	async function updatePresetButtonAppearance() {
+		const currentPresetName = await getCurrentPresetName();
+		ButtonBar.updateTooltip('preset-switcher-button', `Preferences preset: ${currentPresetName}`);
 		const button = document.querySelector('.preset-switcher-button');
 		if (!button) return;
-
-		const currentPresetName = await getCurrentPresetName();
-
-		if (currentPresetName === 'None') {
-			button.style.color = '';
-		} else {
-			button.style.color = '#0084ff';
-		}
-		button.tooltip?.updateText(`Preferences preset: ${currentPresetName}`);
+		button.style.color = currentPresetName === 'None' ? '' : '#0084ff';
 	}
 
 	// ======== SETTINGS PAGE INTEGRATION ========

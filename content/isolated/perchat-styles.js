@@ -251,7 +251,7 @@
 
 		if (activeStyle && activeStyle.key === 'use-current') {
 			button.style.color = '';
-			button.tooltip?.updateText("Chat style: Use current");
+			ButtonBar.updateTooltip('style-selector-button', "Chat style: Use current");
 			return;
 		}
 
@@ -273,10 +273,10 @@
 		const prefix = styleSource === 'project' ? 'Project style' : 'Chat style';
 		if (activeStyle) {
 			button.style.color = '#0084ff';
-			button.tooltip?.updateText(`${prefix}: ${activeStyle.name}`);
+			ButtonBar.updateTooltip('style-selector-button', `${prefix}: ${activeStyle.name}`);
 		} else {
 			button.style.color = '';
-			button.tooltip?.updateText(`${prefix}: Use current`);
+			ButtonBar.updateTooltip('style-selector-button', `${prefix}: Use current`);
 		}
 	}
 

@@ -1098,6 +1098,15 @@ const ButtonBar = {
 		return this._currentGroup;
 	},
 
+	updateTooltip(buttonClass, text) {
+		const reg = this._registrations.get(buttonClass);
+		if (reg) reg.tooltip = text;
+		const button = this._container?.querySelector('.' + buttonClass);
+		if (button?.tooltip) button.tooltip.updateText(text);
+		const modalEntry = this._mobileModalButtons.find(b => b.class === buttonClass);
+		if (modalEntry) modalEntry.tooltip = text;
+	},
+
 	register({ buttonClass, createFn, tooltip = '', forceDisplayOnMobile = false, pages, onInjected = null }) {
 		if (this._registrations.has(buttonClass)) return;
 		this._registrations.set(buttonClass, { buttonClass, createFn, tooltip, forceDisplayOnMobile, pages, onInjected });
@@ -1234,6 +1243,7 @@ const ButtonBar = {
 						createFn: reg.createFn,
 						tooltip: reg.tooltip
 					});
+					if (reg.onInjected) reg.onInjected(null);
 				}
 				continue;
 			}

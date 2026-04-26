@@ -60,15 +60,15 @@
                 </div>
             </div>
         `;
-			button.tooltip?.updateText(state === 'loading' ? 'Loading audio...' : 'Stopping...');
+			ButtonBar.updateTooltip('tts-settings-button', state === 'loading' ? 'Loading audio...' : 'Stopping...');
 		} else if (state === 'playing' || isProcessing) {
 			console.log('[updateSettingsButton] Setting playing state');
 			button.innerHTML = PAUSE_ICON;
-			button.tooltip?.updateText('Stop playback');
+			ButtonBar.updateTooltip('tts-settings-button', 'Stop playback');
 		} else {
 			console.log('[updateSettingsButton] Setting idle state');
 			button.innerHTML = SPEAKER_ICON;
-			button.tooltip?.updateText('TTS Settings');
+			ButtonBar.updateTooltip('tts-settings-button', 'TTS Settings');
 		}
 	}
 	//#endregion
