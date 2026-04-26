@@ -843,7 +843,7 @@
 		const accountFeatureSettings = await promptForSettingsMismatch(settings);
 
 		const conversation = new ClaudeConversation(getOrgId());
-		conversation.prepareNew(name, model, null, accountFeatureSettings);
+		conversation.prepareNew(name, model, getProjectId(), accountFeatureSettings);
 
 		// Build import message tied to real conversation
 		const importMessage = new ClaudeMessage(conversation);

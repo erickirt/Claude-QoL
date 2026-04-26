@@ -199,6 +199,7 @@ class ClaudeConversation {
 			name: name || '',
 		};
 		if (model) this._pendingCreateParams.model = model;
+		if (projectUuid) this._pendingCreateParams.project_uuid = projectUuid;
 
 		this.conversationData = {
 			uuid: this.conversationId,
