@@ -1010,9 +1010,10 @@ const pageLayouts = {
 	chatWiggle: {
 		group: 'chat',
 		match() {
+			const wiggle = document.querySelector('[data-testid="wiggle-controls-actions"]');
 			return window.location.href.includes('/chat/')
 				&& !document.querySelector('[data-testid="chat-actions"]')
-				&& !!document.querySelector('[data-testid="wiggle-controls-actions"]');
+				&& !!wiggle && !wiggle.closest('[inert]');
 		},
 		getAnchor() {
 			const wiggle = document.querySelector('[data-testid="wiggle-controls-actions"]');
