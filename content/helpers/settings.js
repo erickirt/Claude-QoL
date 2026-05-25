@@ -45,6 +45,9 @@ const SETTINGS_KEYS = {
 	PREF_SWITCHER: {
 		PRESETS: { key: 'preference_presets', default: {}, type: 'object' },
 	},
+	BANNER_WATCHER: {
+		STORED_FLAGS: { key: 'banner_stored_flags', default: {}, type: 'object' },
+	},
 };
 
 // ======== WORLD DETECTION ========

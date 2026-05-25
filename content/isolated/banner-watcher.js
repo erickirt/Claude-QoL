@@ -54,23 +54,29 @@
 		}
 
 		try {
+			const storedFlags = await settingsRegistry.get(SETTINGS_KEYS.BANNER_WATCHER.STORED_FLAGS);
+
 			const orgId = getOrgId();
 			const response = await fetch('/api/organizations');
-			if (!response.ok) return;
-
-			const orgs = await response.json();
-			const org = orgs.find(o => o.uuid === orgId);
-			if (!org || !org.active_flags) {
-				_activeFlags = [];
-				updateButton();
-				return;
+			if (response.ok) {
+				const orgs = await response.json();
+				const org = orgs.find(o => o.uuid === orgId);
+				if (org && org.active_flags) {
+					for (const flag of org.active_flags) {
+						storedFlags[flag.type] = { type: flag.type, expires_at: flag.expires_at || null };
+					}
+				}
 			}
 
 			const now = Date.now();
-			_activeFlags = org.active_flags.filter(flag => {
-				if (!flag.expires_at) return true;
-				return new Date(flag.expires_at).getTime() > now;
-			});
+			for (const [key, flag] of Object.entries(storedFlags)) {
+				if (flag.expires_at && new Date(flag.expires_at).getTime() <= now) {
+					delete storedFlags[key];
+				}
+			}
+
+			await settingsRegistry.set(SETTINGS_KEYS.BANNER_WATCHER.STORED_FLAGS, storedFlags);
+			_activeFlags = Object.values(storedFlags);
 			updateButton();
 		} catch (e) {
 			// Silently ignore polling errors
