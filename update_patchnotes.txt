@@ -1,3 +1,4 @@
+Add "Copy as rich text" button to content blocks — pastes with formatting into email, Docs, etc.
 Fix global search not showing up
 Fix project buttons not showing up
 Restore Opus 4.5 to the model dropdown (for now, it will likely stop working in the future, same for Sonnet 4.5)

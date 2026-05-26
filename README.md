@@ -65,6 +65,9 @@ You can also IMPORT a chat from a ZIP format export, and it will appear as thoug
 
 Adds a dropdown to the sidebar to let you switch between different preferences. You can create/edit presets in the settings.
 
+## Copy as Rich Text
+Adds a "Copy as rich text" button next to the existing copy button on content blocks. Converts markdown to formatted HTML so it pastes with proper bold, italic, lists, headings, etc. into email clients (Outlook, Gmail), Google Docs, and other rich text editors.
+
 ## Style selector
 <img width="440" height="220" alt="image" src="https://github.com/user-attachments/assets/e90642a6-1780-4418-8f9c-74ad6f2140ed" />
 
