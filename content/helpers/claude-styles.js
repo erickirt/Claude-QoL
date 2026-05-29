@@ -1486,11 +1486,11 @@ const MessageButtonBar = {
 			}
 		}
 
-		// Fallback: insert before the copy button group
+		// Fallback: insert before the copy button
 		if (!insertBefore) {
-			const copyButtonParent = container.querySelector('[data-testid="action-bar-copy"]')?.parentElement;
-			if (copyButtonParent) {
-				insertBefore = copyButtonParent;
+			const copyButton = container.querySelector('[data-testid="action-bar-copy"]');
+			if (copyButton) {
+				insertBefore = copyButton;
 			}
 		}
 
@@ -1501,7 +1501,7 @@ const MessageButtonBar = {
 		if (insertBefore) {
 			container.insertBefore(button, insertBefore);
 		} else {
-			container.appendChild(button);
+			container.insertBefore(button, container.firstElementChild);
 		}
 	},
 };
