@@ -1,5 +1,5 @@
 // extra-models.js
-(function() {
+(function () {
     'use strict';
 
     const EXTRA_BOOTSTRAP_MODELS = [
@@ -8,26 +8,6 @@
             name: 'Opus 4.5',
             inactive: true,
             notice_text: 'Opus consumes usage limits faster than other models',
-            paprika_modes: ['extended'],
-            thinking_modes: [
-                {
-                    description: 'Think longer for complex tasks',
-                    description_key: 'amber_river_echo',
-                    id: 'extended',
-                    is_default: false,
-                    mode: 'extended',
-                    paprika_mode_value: 'extended',
-                    selection_title: 'Extended',
-                    selection_title_key: 'crimson_peak_summit',
-                    title: 'Extended thinking',
-                    title_key: 'golden_forest_whisper'
-                }
-            ]
-        },
-        {
-            model: 'claude-sonnet-4-5-20250929',
-            name: 'Sonnet 4.5',
-            overflow: true,
             paprika_modes: ['extended'],
             thinking_modes: [
                 {
