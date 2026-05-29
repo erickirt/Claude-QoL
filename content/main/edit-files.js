@@ -40,13 +40,11 @@
 		// Find the native edit button by its unique SVG path (pencil icon)
 		const allButtons = controlsContainer.querySelectorAll('button[type="button"]');
 		let editButton = null;
-		let editButtonWrapper = null;
 
 		for (const btn of allButtons) {
 			const ariaLabel = btn.getAttribute('aria-label');
 			if (ariaLabel === 'Edit') {
 				editButton = btn;
-				editButtonWrapper = btn.closest('div.w-fit');
 				break;
 			}
 
@@ -54,12 +52,11 @@
 			const svgPath = btn.querySelector('svg path');
 			if (svgPath && svgPath.getAttribute('d')?.startsWith('M9.728 2.88a1.5')) {
 				editButton = btn;
-				editButtonWrapper = btn.closest('div.w-fit');
 				break;
 			}
 		}
 
-		if (!editButton || !editButtonWrapper) return;
+		if (!editButton) return;
 
 		button.onclick = async (e) => {
 			e.preventDefault();
@@ -69,14 +66,18 @@
 			setTimeout(async () => { autoSubmitEdit(); }, 100);
 		};
 
-		// Create wrapper div matching the structure
-		const wrapper = document.createElement('div');
-		wrapper.className = 'w-fit';
-		wrapper.setAttribute('data-state', 'closed');
-		wrapper.appendChild(button);
-
-		// Insert before the native edit button wrapper
-		editButtonWrapper.parentElement.insertBefore(wrapper, editButtonWrapper);
+		// Old layout: each button is wrapped in <div class="w-fit">.
+		// New layout: buttons are direct children of a flex container (no w-fit wrapper).
+		const editButtonWrapper = editButton.closest('div.w-fit');
+		if (editButtonWrapper) {
+			const wrapper = document.createElement('div');
+			wrapper.className = 'w-fit';
+			wrapper.setAttribute('data-state', 'closed');
+			wrapper.appendChild(button);
+			editButtonWrapper.parentElement.insertBefore(wrapper, editButtonWrapper);
+		} else {
+			editButton.parentElement.insertBefore(button, editButton);
+		}
 	}
 
 	function updateMessageUI(messageElement, newText) {
