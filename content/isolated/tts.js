@@ -833,10 +833,10 @@
 						value: v.voice_id,
 						label: v.name
 					}));
-					populateSelect(voiceSelect, newVoiceOptions);
+					voiceSelect.populateOptions(newVoiceOptions);
 
 					const newModelOptions = newModels.map(m => ({ value: m.model_id, label: m.name }));
-					populateSelect(modelSelect, newModelOptions);
+					modelSelect.populateOptions(newModelOptions);
 
 					loadingModal.destroy();
 				} catch (error) {
@@ -874,7 +874,7 @@
 							value: v.voice_id,
 							label: v.name
 						}));
-						populateSelect(voiceSelect, newVoiceOptions);
+						voiceSelect.populateOptions(newVoiceOptions);
 
 						chatVoiceOverrideSelect.populateOptions([
 							{ value: '', label: 'Use default voice' },
@@ -882,7 +882,7 @@
 						]);
 
 						const newModelOptions = newModels.map(m => ({ value: m.model_id, label: m.name }));
-						populateSelect(modelSelect, newModelOptions);
+						modelSelect.populateOptions(newModelOptions);
 
 						loadingModal.destroy();
 					} else {
@@ -1109,11 +1109,6 @@
 			showClaudeAlert('Error', 'Failed to load character configuration: ' + error.message);
 			console.error('Actor config modal error:', error);
 		}
-	}
-
-	// Simple UI population function
-	function populateSelect(selectElement, options, currentValue = '') {
-		selectElement.populateOptions(options, currentValue);
 	}
 
 	async function loadSettings() {
