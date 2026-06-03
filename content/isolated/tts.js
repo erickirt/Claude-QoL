@@ -589,9 +589,9 @@
 			voiceSection.appendChild(voiceLabel);
 
 			const voiceOptions = voices.length > 0
-				? voices.map(v => ({ value: v.voice_id, label: v.name || `${v.name} (${v.voice_id})` }))
+				? voices.map(v => ({ value: v.voice_id, label: v.name }))
 				: [{ value: '', label: currentProviderInfo.requiresApiKey ? 'Set an API key...' : 'Loading...' }];
-			const voiceSelect = createClaudeSelect(voiceOptions, settings.voice || '');
+			const voiceSelect = createClaudeSearchableSelect(voiceOptions, settings.voice || '');
 			voiceSelect.id = 'voiceSelect';
 			voiceSelect.disabled = currentProviderInfo.requiresApiKey && !settings.apiKey;
 			voiceSection.appendChild(voiceSelect);
@@ -654,7 +654,7 @@
 				{ value: '', label: 'Use default voice' },
 				...voiceOptions.filter(opt => opt.value) // Exclude "Set an API key..." option
 			];
-			const chatVoiceOverrideSelect = createClaudeSelect(overrideOptions, chatVoiceOverride);
+			const chatVoiceOverrideSelect = createClaudeSearchableSelect(overrideOptions, chatVoiceOverride);
 			chatVoiceOverrideSelect.id = 'chatVoiceOverride';
 			chatVoiceOverrideSelect.disabled = !settings.apiKey;
 			overrideSection.appendChild(chatVoiceOverrideSelect);
@@ -804,8 +804,8 @@
 				if (newProviderInfo.requiresApiKey) {
 					const currentApiKey = apiKeyInput.value.trim();
 					if (!currentApiKey) {
-						voiceSelect.innerHTML = '<option value="">Set an API key...</option>';
-						modelSelect.innerHTML = '<option value="">Set an API key...</option>';
+						voiceSelect.populateOptions([{ value: '', label: 'Set an API key...' }]);
+						modelSelect.populateOptions([{ value: '', label: 'Set an API key...' }]);
 						return;
 					}
 				}
@@ -831,7 +831,7 @@
 
 					const newVoiceOptions = newVoices.map(v => ({
 						value: v.voice_id,
-						label: v.name || `${v.name} (${v.voice_id})`
+						label: v.name
 					}));
 					populateSelect(voiceSelect, newVoiceOptions);
 
@@ -872,18 +872,14 @@
 
 						const newVoiceOptions = newVoices.map(v => ({
 							value: v.voice_id,
-							label: `${v.name} (${v.voice_id})`
+							label: v.name
 						}));
 						populateSelect(voiceSelect, newVoiceOptions);
 
-						chatVoiceOverrideSelect.innerHTML = '<option value="">Use default voice</option>';
-						newVoiceOptions.forEach(opt => {
-							const option = document.createElement('option');
-							option.value = opt.value;
-							option.textContent = opt.label;
-							chatVoiceOverrideSelect.appendChild(option);
-						});
-						chatVoiceOverrideSelect.disabled = false;
+						chatVoiceOverrideSelect.populateOptions([
+							{ value: '', label: 'Use default voice' },
+							...newVoiceOptions
+						]);
 
 						const newModelOptions = newModels.map(m => ({ value: m.model_id, label: m.name }));
 						populateSelect(modelSelect, newModelOptions);
@@ -936,7 +932,7 @@
 
 			const voiceOptions = [
 				{ value: '', label: 'None' },
-				...voices.map(v => ({ value: v.voice_id, label: `${v.name} (${v.voice_id})` }))
+				...voices.map(v => ({ value: v.voice_id, label: v.name }))
 			];
 
 			// Create modal content
@@ -1043,7 +1039,7 @@
 					genderSelect.className += ' opacity-60';
 				}
 
-				const voiceSelect = createClaudeSelect(voiceOptions, character.voice || '');
+				const voiceSelect = createClaudeSearchableSelect(voiceOptions, character.voice || '');
 				voiceSelect.classList.add('character-voice');
 
 				row.appendChild(nameInput);
@@ -1103,7 +1099,7 @@
 			});
 
 			// Adjust modal width
-			modal.modal.style.maxWidth = '700px';
+			modal.modal.style.maxWidth = '900px';
 			modal.modal.style.width = '90%';
 
 			modal.show();
@@ -1117,23 +1113,7 @@
 
 	// Simple UI population function
 	function populateSelect(selectElement, options, currentValue = '') {
-		selectElement.innerHTML = '';
-
-		if (options.length === 0) {
-			selectElement.innerHTML = '<option value="">None available</option>';
-			selectElement.disabled = true;
-			return;
-		}
-
-		options.forEach(option => {
-			const optionElement = document.createElement('option');
-			optionElement.value = option.value;
-			optionElement.textContent = option.label;
-			selectElement.appendChild(optionElement);
-		});
-
-		selectElement.disabled = false;
-		selectElement.value = currentValue || options[0]?.value || '';
+		selectElement.populateOptions(options, currentValue);
 	}
 
 	async function loadSettings() {

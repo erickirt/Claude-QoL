@@ -173,7 +173,7 @@
 				selectOptions = styles.map(s => ({ value: s.key, label: s.name }));
 			}
 
-			const select = createClaudeSelect(selectOptions, currentStyleId);
+			const select = createClaudeSearchableSelect(selectOptions, currentStyleId);
 			select.classList.add('mb-4');
 
 			const infoText = document.createElement('div');
