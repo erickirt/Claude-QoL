@@ -26,6 +26,24 @@
 		return results;
 	}
 
+	function findArtifactCopyButtons() {
+		const results = [];
+		const splitDropdowns = document.querySelectorAll('[data-cds="SplitDropdownButton"]');
+
+		for (const dropdown of splitDropdowns) {
+			const copyBtn = dropdown.querySelector('.contents > button');
+			if (!copyBtn) continue;
+
+			const parent = dropdown.parentElement;
+			if (!parent) continue;
+			if (parent.querySelector('.' + RICH_COPY_CLASS)) continue;
+
+			results.push({ copyBtn, dropdown });
+		}
+
+		return results;
+	}
+
 	async function copyAsRichText(nativeCopyBtn, richBtn) {
 		window.postMessage({ type: 'rich-copy-activate' }, '*');
 
@@ -99,11 +117,62 @@
 		return btn;
 	}
 
+	function createArtifactRichCopyButton(copyBtn, dropdown) {
+		const parent = dropdown.parentElement;
+		const siblingBtn = parent.querySelector(':scope > button[data-cds="Button"]');
+
+		let btn;
+		if (siblingBtn) {
+			btn = siblingBtn.cloneNode(false);
+			btn.className = siblingBtn.className + ' ' + RICH_COPY_CLASS;
+
+			const iconSpans = siblingBtn.querySelectorAll(':scope > span');
+			for (const span of iconSpans) {
+				const clone = span.cloneNode(true);
+				if (clone.getAttribute('aria-hidden') !== 'true' || clone.querySelector('[data-cds="Icon"]')) {
+					const iconEl = clone.querySelector('[data-cds="Icon"]');
+					if (iconEl) {
+						iconEl.innerHTML = RICH_COPY_SVG;
+					} else if (!clone.classList.contains('absolute')) {
+						clone.innerHTML = RICH_COPY_SVG;
+					}
+				}
+				btn.appendChild(clone);
+			}
+		}
+
+		if (!btn) {
+			btn = document.createElement('button');
+			btn.className = RICH_COPY_CLASS;
+			btn.innerHTML = RICH_COPY_SVG;
+		}
+
+		btn.setAttribute('aria-label', 'Copy as rich text');
+		btn.removeAttribute('data-testid');
+		btn.removeAttribute('data-state');
+
+		btn.addEventListener('click', (e) => {
+			e.preventDefault();
+			e.stopPropagation();
+			copyAsRichText(copyBtn, btn);
+		});
+
+		createClaudeTooltip(btn, 'Copy as rich text');
+
+		return btn;
+	}
+
 	function injectButtons() {
 		const copyButtons = findContentBlockCopyButtons();
 		for (const copyBtn of copyButtons) {
 			const richBtn = createRichCopyButton(copyBtn);
 			copyBtn.insertAdjacentElement('afterend', richBtn);
+		}
+
+		const artifactTargets = findArtifactCopyButtons();
+		for (const { copyBtn, dropdown } of artifactTargets) {
+			const richBtn = createArtifactRichCopyButton(copyBtn, dropdown);
+			dropdown.insertAdjacentElement('afterend', richBtn);
 		}
 	}
 
