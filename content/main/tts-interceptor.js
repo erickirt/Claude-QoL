@@ -127,7 +127,7 @@
 			const currentConversationId = window.location.pathname.match(/\/chat\/([^/?]+)/)?.[1];
 
 			// Only handle if valid and matches current conversation
-			if (!orgId || !conversationId || conversationId !== currentConversationId) {
+			if (!orgId || !conversationId || (currentConversationId && conversationId !== currentConversationId)) {
 				return originalFetch(...args);
 			}
 

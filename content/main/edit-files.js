@@ -4,7 +4,7 @@
 
 	//#region Constants and State
 
-	let pendingEditIntercept = false;
+	let pendingEditData = null;
 
 	const TEMP_STYLE_NAME = 'advanced_edit_temporary_style';
 	const TEMP_STYLE_STORAGE_KEY = 'temp_style_id';
@@ -36,17 +36,30 @@
 		return btn;
 	}
 
+	function findExistingMessage(controlsContainer, messages) {
+		const { userMessages, assistantMessages } = getUIMessages();
+		const userIndex = userMessages.findIndex(msg => findMessageControls(msg) === controlsContainer);
+		if (userIndex === -1 || userIndex >= assistantMessages.length) return null;
+
+		let el = assistantMessages[userIndex];
+		while (el && !el.hasAttribute('data-message-uuid')) el = el.parentElement;
+		const assistantUuid = el?.getAttribute('data-message-uuid');
+		if (!assistantUuid) return null;
+
+		const apiAssistant = messages.find(m => m.uuid === assistantUuid);
+		if (!apiAssistant) return null;
+		return messages.find(m => m.uuid === apiAssistant.parent_message_uuid);
+	}
+
 	function insertAdvancedEditButton(button, controlsContainer) {
 		// Find the native edit button by its unique SVG path (pencil icon)
 		const allButtons = controlsContainer.querySelectorAll('button[type="button"]');
 		let editButton = null;
-		let editButtonWrapper = null;
 
 		for (const btn of allButtons) {
 			const ariaLabel = btn.getAttribute('aria-label');
 			if (ariaLabel === 'Edit') {
 				editButton = btn;
-				editButtonWrapper = btn.closest('div.w-fit');
 				break;
 			}
 
@@ -54,150 +67,107 @@
 			const svgPath = btn.querySelector('svg path');
 			if (svgPath && svgPath.getAttribute('d')?.startsWith('M9.728 2.88a1.5')) {
 				editButton = btn;
-				editButtonWrapper = btn.closest('div.w-fit');
 				break;
 			}
 		}
 
-		if (!editButton || !editButtonWrapper) return;
+		if (!editButton) return;
 
 		button.onclick = async (e) => {
 			e.preventDefault();
 			e.stopPropagation();
-			editButton.click();
-			pendingEditIntercept = true;
-			setTimeout(async () => { autoSubmitEdit(); }, 100);
+
+			try {
+				const orgId = getOrgId();
+				const conversationId = getConversationId();
+				const conversation = new ClaudeConversation(orgId, conversationId);
+				const messages = await conversation.getMessages(false);
+
+				const existingMessage = findExistingMessage(controlsContainer, messages);
+				if (!existingMessage) {
+					showClaudeAlert('Error', 'Could not find the message to edit.');
+					return;
+				}
+
+				const effectiveStyle = await getEffectiveStyle(orgId, conversationId);
+				const currentStyleText = effectiveStyle?.prompt || '';
+
+				const result = await createEditModal(orgId, conversationId, existingMessage, currentStyleText);
+
+				pendingEditData = {
+					styleText: result.styleText,
+					originalStyleText: currentStyleText,
+				};
+				editButton.click();
+				setTimeout(() => autoSubmitEditWithText(editMessage.text), 100);
+			} catch (error) {
+				if (error.message === 'Edit cancelled by user') {
+					console.log('Edit cancelled — no side effects');
+				} else {
+					console.error('Advanced edit error:', error);
+				}
+			}
 		};
 
-		// Create wrapper div matching the structure
-		const wrapper = document.createElement('div');
-		wrapper.className = 'w-fit';
-		wrapper.setAttribute('data-state', 'closed');
-		wrapper.appendChild(button);
-
-		// Insert before the native edit button wrapper
-		editButtonWrapper.parentElement.insertBefore(wrapper, editButtonWrapper);
+		// Old layout: each button is wrapped in <div class="w-fit">.
+		// New layout: buttons are direct children of a flex container (no w-fit wrapper).
+		const editButtonWrapper = editButton.closest('div.w-fit');
+		if (editButtonWrapper) {
+			const wrapper = document.createElement('div');
+			wrapper.className = 'w-fit';
+			wrapper.setAttribute('data-state', 'closed');
+			wrapper.appendChild(button);
+			editButtonWrapper.parentElement.insertBefore(wrapper, editButtonWrapper);
+		} else {
+			editButton.parentElement.insertBefore(button, editButton);
+		}
 	}
 
-	function updateMessageUI(messageElement, newText) {
-		if (!messageElement) return;
+	function autoSubmitEditWithText(newText) {
+		if (!pendingEditData) return;
 
-		// Hide original paragraphs (but keep them in DOM)
-		const originalParagraphs = messageElement.querySelectorAll('p:not(.custom-edit-text)');
-		originalParagraphs.forEach(p => {
-			p.style.display = 'none';
-			p.classList.add('original-hidden');
-		});
-
-		// Add our custom paragraph(s)
-		const customP = document.createElement('p');
-		customP.className = 'whitespace-pre-wrap break-words custom-edit-text';
-		customP.textContent = newText;
-		messageElement.appendChild(customP);
-
-		// Set up observer to clean up when Claude updates this message
-		const observer = new MutationObserver((mutations, obs) => {
-			console.log('Claude updated message, cleaning up edit UI');
-			// Clean up our fake content
-			messageElement.querySelectorAll('.custom-edit-text').forEach(p => p.remove());
-			messageElement.querySelectorAll('.original-hidden').forEach(p => {
-				p.style.display = '';
-				p.classList.remove('original-hidden');
-			});
-
-			// Disconnect observer
-			obs.disconnect();
-		});
-
-		observer.observe(messageElement, {
-			childList: true,      // Node additions/removals
-			subtree: true,        // Watch all descendants
-			attributes: true,     // Attribute changes
-			characterData: true   // Text content changes
-		});
-
-	}
-
-
-	function autoSubmitEdit() {
-		if (!pendingEditIntercept) return;
-
-		// Find the submit button
 		const saveButton = document.querySelector('button[type="submit"]');
 		if (saveButton) {
-			// Find the form
 			const form = saveButton.closest('form');
 			if (!form) {
-				setTimeout(autoSubmitEdit, 50);
+				setTimeout(() => autoSubmitEditWithText(newText), 50);
 				return;
 			}
 
-			// Find the textarea
 			const textarea = form.querySelector('textarea');
 			if (!textarea) {
-				setTimeout(autoSubmitEdit, 50);
+				setTimeout(() => autoSubmitEditWithText(newText), 50);
 				return;
 			}
 
-			// Focus the textarea
 			textarea.focus();
+			textarea.select();
+			// Always append a space to guarantee the UI detects a change — the fetch interceptor overwrites the text anyway
+			document.execCommand('insertText', false, newText + ' ');
 
-			// Move cursor to end
-			textarea.selectionStart = textarea.selectionEnd = textarea.value.length;
-
-			// Use execCommand to insert text (triggers all events naturally, enables submitting)
-			document.execCommand('insertText', false, ' ');
-
-			// Give it a moment to process, then click
 			setTimeout(() => {
 				saveButton.click();
 			}, 100);
 		} else {
-			// Retry if not found yet
-			setTimeout(autoSubmitEdit, 50);
+			setTimeout(() => autoSubmitEditWithText(newText), 50);
 		}
 	}
 	//#endregion
 
 	//#region Modal UI Construction
-	async function createEditModal(url, config) {
-		const bodyData = JSON.parse(config.body);
-		const urlParts = url.split('/');
-		const orgId = urlParts[urlParts.indexOf('organizations') + 1];
-		const conversationId = urlParts[urlParts.indexOf('chat_conversations') + 1];
-
-		// Create conversation and get messages (trunk only to handle multiple variants)
+	async function createEditModal(orgId, conversationId, existingMessage, currentStyleText) {
 		const conversation = new ClaudeConversation(orgId, conversationId);
-		const ROOT_UUID = '00000000-0000-4000-8000-000000000000';
-		const messages = await conversation.getMessages(false);
 
-		// Find the existing message being edited
-		let existingMessage = messages.find(
-			m => m.parent_message_uuid === bodyData.parent_message_uuid && m.sender === 'human'
-		);
-
-		// If not found, it's the first message (whose parent was reparented to a phantom)
-		if (!existingMessage) {
-			existingMessage = messages.find(
-				m => m.sender === 'human' && m.parent_message_uuid === ROOT_UUID
-			);
-		}
-
-		// Create working message for editing
 		editMessage = new ClaudeMessage(conversation);
-		editMessage.text = bodyData.prompt.trim();
-		editMessage.parent_message_uuid = bodyData.parent_message_uuid;
-		// Copy files from existing message (if any)
+		editMessage.text = existingMessage.text.trim();
+		editMessage.parent_message_uuid = existingMessage.parent_message_uuid;
 
 		for (const file of existingMessage.files) {
 			editMessage.attachFile(file);
 		}
 
-
-		// Extract style text from personalized_styles array
-		const originalStyle = bodyData.personalized_styles?.[0];
-		let originalStyleText = originalStyle?.prompt || '';
-		if (originalStyleText == "Normal") originalStyleText = '';
+		let originalStyleText = currentStyleText;
+		if (originalStyleText === 'Normal') originalStyleText = '';
 
 		return new Promise((resolve, reject) => {
 			const content = document.createElement('div');
@@ -221,31 +191,30 @@
 				reject(new Error('Edit cancelled by user'));
 			});
 
-			// Add confirm button with async handling
+			// Add confirm button
 			const submitBtn = modal.addConfirm('Submit Edit', async (btn) => {
-				// Show loading modal
-				const loadingModal = createLoadingModal('Submitting edit...');
-				loadingModal.show();
-
 				const modalData = collectModalData();
 
-				try {
-					const modifiedRequest = await formatNewRequest(url, config, modalData);
-					console.log("Resolving request with modified data:", modifiedRequest);
-					loadingModal.destroy();
-					cleanupEditState();
-					resolve(modifiedRequest);
-					return true; // Close modal
-				} catch (error) {
-					console.error('Error formatting new request:', error);
-					loadingModal.destroy();
-					showClaudeAlert('Edit Error', error.message || 'Failed to submit edit');
-					return false; // Keep modal open on error
+				// Pre-validate style if it changed
+				if (modalData.styleText !== originalStyleText) {
+					const loadingModal = createLoadingModal('Preparing style...');
+					loadingModal.show();
+					try {
+						await ensureTempStyle(orgId, modalData.styleText);
+						loadingModal.destroy();
+					} catch (error) {
+						console.error('Error preparing style:', error);
+						loadingModal.destroy();
+						showClaudeAlert('Edit Error', error.message || 'Failed to prepare style');
+						return false;
+					}
 				}
+
+				resolve({ styleText: modalData.styleText });
+				return true;
 			});
 
 			// Store button reference for upload status updates
-			// Use backdrop since that's what updateSubmitButtonState queries for
 			modal.backdrop.classList.add('claude-edit-modal');
 			modal.backdrop.submitButton = submitBtn;
 
@@ -752,11 +721,8 @@
 		});
 	}
 
-	async function formatNewRequest(url, config, modalData) {
+	async function formatNewRequest(url, config, editData) {
 		const originalBody = JSON.parse(config.body);
-		const originalStyle = originalBody.personalized_styles?.[0];
-		let originalStyleText = originalStyle?.prompt || '';
-		if (originalStyleText == "Normal") originalStyleText = '';
 
 		// Extract orgId from URL
 		const urlParts = url.split('/');
@@ -772,13 +738,13 @@
 			attachments: completionJson.attachments
 		};
 
-		// Only update style if it changed
-		if (modalData.styleText !== originalStyleText) {
-			const tempStyleId = await ensureTempStyle(orgId, modalData.styleText);
+		// Only update style if it changed from what we showed in the modal
+		if (editData.styleText !== editData.originalStyleText) {
+			const tempStyleId = await ensureTempStyle(orgId, editData.styleText);
 			modifiedBody.personalized_styles = [{
 				key: tempStyleId,
 				uuid: tempStyleId,
-				prompt: modalData.styleText,
+				prompt: editData.styleText,
 				name: TEMP_STYLE_NAME,
 				isDefault: false,
 				type: "custom",
@@ -871,32 +837,20 @@
 			url = input.url;
 		}
 
-		// Intercept /completion requests when edit flag is set
-		if (url && url.includes('/completion') && pendingEditIntercept && config?.method === 'POST') {
+		// Intercept /completion requests when edit data is pending
+		if (url && url.includes('/completion') && pendingEditData && config?.method === 'POST') {
 			console.log('Intercepting edit completion request');
-			const messageElement = pendingEditIntercept; // Store reference before resetting
-			pendingEditIntercept = null; // Reset flag immediately
+			const editData = pendingEditData;
+			pendingEditData = null;
 
 			try {
-				// Create modal and wait for user action
-				const modifiedRequest = await createEditModal(url, config);
-
-				// Update the UI with the new text immediately
-				const bodyData = JSON.parse(modifiedRequest.config.body);
-				setTimeout(() => {
-					const { userMessages } = getUIMessages();
-					const lastMessage = userMessages[userMessages.length - 1];
-					if (lastMessage) {
-						updateMessageUI(lastMessage, bodyData.prompt);
-					}
-				}, 200);
-
-				// User confirmed - make the modified request
+				const modifiedRequest = await formatNewRequest(url, config, editData);
+				cleanupEditState();
 				return originalFetch(modifiedRequest.url, modifiedRequest.config);
 			} catch (error) {
-				// User cancelled - throw error to cancel the request
-				console.log('Edit cancelled by user');
-				throw error;
+				console.error('Error applying edit modifications:', error);
+				cleanupEditState();
+				return originalFetch(...args);
 			}
 		}
 

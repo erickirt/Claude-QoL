@@ -513,7 +513,246 @@ function createClaudeSelect(options, selectedValue = '', onChange = null) {
 		select.addEventListener('change', onChange);
 	}
 
+	select.populateOptions = function (newOptions, currentValue = '') {
+		select.innerHTML = '';
+		if (newOptions.length === 0) {
+			const optionEl = document.createElement('option');
+			optionEl.value = '';
+			optionEl.textContent = 'None available';
+			select.appendChild(optionEl);
+			select.disabled = true;
+			return;
+		}
+		newOptions.forEach(option => {
+			const optionEl = document.createElement('option');
+			optionEl.value = option.value;
+			optionEl.textContent = option.label;
+			select.appendChild(optionEl);
+		});
+		select.disabled = false;
+		select.value = currentValue || newOptions[0]?.value || '';
+	};
+
 	return select;
+}
+
+function createClaudeSearchableSelect(options, selectedValue = '', onChange = null) {
+	let currentOptions = [...options];
+	let selectedVal = selectedValue;
+	let isDisabled = false;
+	let isOpen = false;
+	let highlightedIndex = -1;
+	let changeHandler = onChange;
+
+	const wrapper = document.createElement('div');
+	wrapper.style.position = 'relative';
+
+	const display = document.createElement('div');
+	display.className = CLAUDE_CLASSES.SELECT;
+	display.style.display = 'flex';
+	display.style.alignItems = 'center';
+	display.style.justifyContent = 'space-between';
+	display.style.userSelect = 'none';
+	wrapper.appendChild(display);
+
+	const displayText = document.createElement('span');
+	displayText.style.overflow = 'hidden';
+	displayText.style.textOverflow = 'ellipsis';
+	displayText.style.whiteSpace = 'nowrap';
+	displayText.style.flex = '1';
+	display.appendChild(displayText);
+
+	const chevron = document.createElement('span');
+	chevron.textContent = '▾';
+	chevron.style.marginLeft = '8px';
+	chevron.style.flexShrink = '0';
+	display.appendChild(chevron);
+
+	const dropdown = document.createElement('div');
+	dropdown.style.cssText = 'position:fixed; z-index:100; display:none; border:1px solid; border-radius:0.375rem; overflow:hidden;';
+	dropdown.className = 'bg-bg-200 border-border-300';
+
+	const searchInput = document.createElement('input');
+	searchInput.type = 'text';
+	searchInput.placeholder = 'Search...';
+	searchInput.className = CLAUDE_CLASSES.INPUT;
+	searchInput.style.borderRadius = '0';
+	searchInput.style.borderLeft = 'none';
+	searchInput.style.borderRight = 'none';
+	searchInput.style.borderTop = 'none';
+	dropdown.appendChild(searchInput);
+
+	const optionsList = document.createElement('div');
+	optionsList.style.cssText = 'max-height:200px; overflow-y:auto;';
+	dropdown.appendChild(optionsList);
+
+	function getSelectedLabel() {
+		const opt = currentOptions.find(o => o.value === selectedVal);
+		return opt ? opt.label : (currentOptions[0]?.label || '');
+	}
+
+	function updateDisplay() {
+		displayText.textContent = getSelectedLabel();
+		if (isDisabled) {
+			display.style.opacity = '0.5';
+			display.style.pointerEvents = 'none';
+		} else {
+			display.style.opacity = '';
+			display.style.pointerEvents = '';
+		}
+	}
+
+	function renderOptions(filter = '') {
+		optionsList.innerHTML = '';
+		const lower = filter.toLowerCase();
+		const filtered = lower ? currentOptions.filter(o => o.label.toLowerCase().includes(lower)) : currentOptions;
+		highlightedIndex = -1;
+
+		filtered.forEach((opt, i) => {
+			const item = document.createElement('div');
+			item.textContent = opt.label;
+			item.style.cssText = 'padding:6px 8px; cursor:pointer;';
+			item.className = 'text-text-100';
+			if (opt.value === selectedVal) {
+				item.style.fontWeight = 'bold';
+			}
+			item.addEventListener('mouseenter', () => {
+				highlightedIndex = i;
+				updateHighlight();
+			});
+			item.addEventListener('mousedown', (e) => {
+				e.preventDefault();
+				selectOption(opt.value);
+			});
+			optionsList.appendChild(item);
+		});
+	}
+
+	function updateHighlight() {
+		const items = optionsList.children;
+		for (let i = 0; i < items.length; i++) {
+			if (i === highlightedIndex) {
+				items[i].classList.add('bg-bg-400');
+			} else {
+				items[i].classList.remove('bg-bg-400');
+			}
+		}
+	}
+
+	function selectOption(val) {
+		selectedVal = val;
+		updateDisplay();
+		closeDropdown();
+		const event = new Event('change', { bubbles: true });
+		wrapper.dispatchEvent(event);
+		if (changeHandler) changeHandler(event);
+	}
+
+	function positionDropdown() {
+		const rect = display.getBoundingClientRect();
+		dropdown.style.top = rect.bottom + 2 + 'px';
+		dropdown.style.left = rect.left + 'px';
+		dropdown.style.width = rect.width + 'px';
+	}
+
+	function openDropdown() {
+		if (isDisabled) return;
+		isOpen = true;
+		document.body.appendChild(dropdown);
+		positionDropdown();
+		dropdown.style.display = '';
+		searchInput.value = '';
+		renderOptions();
+		searchInput.focus();
+	}
+
+	function closeDropdown() {
+		isOpen = false;
+		dropdown.style.display = 'none';
+		if (dropdown.parentNode) dropdown.parentNode.removeChild(dropdown);
+	}
+
+	display.addEventListener('mousedown', (e) => {
+		e.preventDefault();
+		if (isOpen) closeDropdown();
+		else openDropdown();
+	});
+
+	searchInput.addEventListener('input', () => {
+		renderOptions(searchInput.value);
+	});
+
+	searchInput.addEventListener('keydown', (e) => {
+		const lower = searchInput.value.toLowerCase();
+		const filtered = lower ? currentOptions.filter(o => o.label.toLowerCase().includes(lower)) : currentOptions;
+
+		if (e.key === 'ArrowDown') {
+			e.preventDefault();
+			highlightedIndex = Math.min(highlightedIndex + 1, filtered.length - 1);
+			updateHighlight();
+			const items = optionsList.children;
+			if (items[highlightedIndex]) items[highlightedIndex].scrollIntoView({ block: 'nearest' });
+		} else if (e.key === 'ArrowUp') {
+			e.preventDefault();
+			highlightedIndex = Math.max(highlightedIndex - 1, 0);
+			updateHighlight();
+			const items = optionsList.children;
+			if (items[highlightedIndex]) items[highlightedIndex].scrollIntoView({ block: 'nearest' });
+		} else if (e.key === 'Enter') {
+			e.preventDefault();
+			if (highlightedIndex >= 0 && highlightedIndex < filtered.length) {
+				selectOption(filtered[highlightedIndex].value);
+			}
+		} else if (e.key === 'Escape') {
+			e.preventDefault();
+			closeDropdown();
+		}
+	});
+
+	document.addEventListener('mousedown', (e) => {
+		if (isOpen && !wrapper.contains(e.target)) {
+			closeDropdown();
+		}
+	});
+
+	Object.defineProperty(wrapper, 'value', {
+		get: () => selectedVal,
+		set: (val) => {
+			selectedVal = val;
+			updateDisplay();
+		}
+	});
+
+	Object.defineProperty(wrapper, 'disabled', {
+		get: () => isDisabled,
+		set: (val) => {
+			isDisabled = val;
+			updateDisplay();
+		}
+	});
+
+	Object.defineProperty(wrapper, 'onchange', {
+		set: (fn) => { changeHandler = fn; }
+	});
+
+	wrapper.populateOptions = function (newOptions, currentValue = '') {
+		currentOptions = [...newOptions];
+		if (newOptions.length === 0) {
+			currentOptions = [{ value: '', label: 'None available' }];
+			isDisabled = true;
+			selectedVal = '';
+		} else {
+			isDisabled = false;
+			selectedVal = currentValue || newOptions[0]?.value || '';
+		}
+		updateDisplay();
+		if (isOpen) {
+			renderOptions(searchInput.value);
+		}
+	};
+
+	updateDisplay();
+	return wrapper;
 }
 
 function createClaudeCheckbox(labelText = '', checked = false, onChange = null) {
@@ -1486,11 +1725,11 @@ const MessageButtonBar = {
 			}
 		}
 
-		// Fallback: insert before the copy button group
+		// Fallback: insert before the copy button
 		if (!insertBefore) {
-			const copyButtonParent = container.querySelector('[data-testid="action-bar-copy"]')?.parentElement;
-			if (copyButtonParent) {
-				insertBefore = copyButtonParent;
+			const copyButton = container.querySelector('[data-testid="action-bar-copy"]');
+			if (copyButton) {
+				insertBefore = copyButton;
 			}
 		}
 
@@ -1501,7 +1740,7 @@ const MessageButtonBar = {
 		if (insertBefore) {
 			container.insertBefore(button, insertBefore);
 		} else {
-			container.appendChild(button);
+			container.insertBefore(button, container.firstElementChild);
 		}
 	},
 };

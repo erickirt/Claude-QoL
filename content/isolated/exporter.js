@@ -75,7 +75,7 @@
 		return output;
 	}
 
-	function formatMdExport(conversationData, messages, conversationId, includeThinking = true) {
+	async function formatMdExport(conversationData, messages, conversationId, includeThinking = true, includeAttachments = false) {
 		let output = `# ${conversationData.name}\n\n`;
 		if (conversationData.model) {
 			output += `**Model:** ${conversationData.model}\n\n`;
@@ -98,6 +98,25 @@
 					output += `${content.text}\n\n`;
 				}
 				// Skip all other content types (tool_use, tool_result, etc.)
+			}
+
+			if (includeAttachments) {
+				for (const file of message.files) {
+					if (file instanceof ClaudeAttachment) {
+						output += `<details>\n<summary>Attachment: ${file.file_name}</summary>\n\n${file.extracted_content}\n\n</details>\n\n`;
+					} else if (file instanceof ClaudeFile || file instanceof ClaudeCodeExecutionFile) {
+						try {
+							const blob = await file.download();
+							if (!blob) continue;
+							const wrapped = new File([blob], file.file_name);
+							if (!(await isLikelyTextFile(wrapped))) continue;
+							const text = await blob.text();
+							output += `<details>\n<summary>Attachment: ${file.file_name}</summary>\n\n${text}\n\n</details>\n\n`;
+						} catch (e) {
+							console.warn(`Failed to download file ${file.file_name} for markdown export:`, e);
+						}
+					}
+				}
 			}
 
 			output += `---\n\n`;
@@ -541,7 +560,7 @@
 			case 'txt':
 				return formatTxtExport(conversationData, messages, conversationId);
 			case 'md':
-				return formatMdExport(conversationData, messages, conversationId, options.includeThinking);
+				return formatMdExport(conversationData, messages, conversationId, options.includeThinking, options.includeAttachments);
 			case 'jsonl':
 				return formatJsonlExport(conversationData, messages, conversationId);
 			case 'librechat':
@@ -1562,7 +1581,7 @@
 		const content = document.createElement('div');
 
 		// Variables to hold references (may not be created)
-		let formatSelect, toggleInput, thinkingToggleInput, dateInput;
+		let formatSelect, toggleInput, thinkingToggleInput, attachmentsToggleInput, dateInput;
 
 		//#region Export section (always shown, context-aware)
 		{
@@ -1617,6 +1636,16 @@
 			thinkingOption.appendChild(thinkingToggleContainer);
 			content.appendChild(thinkingOption);
 
+			// Attachments option container (for markdown export)
+			const attachmentsOption = document.createElement('div');
+			attachmentsOption.id = 'attachmentsOption';
+			attachmentsOption.className = 'mb-4 hidden';
+
+			const { container: attachmentsToggleContainer, input: attachmentsInput } = createClaudeToggle('Include text attachments', false);
+			attachmentsToggleInput = attachmentsInput;
+			attachmentsOption.appendChild(attachmentsToggleContainer);
+			content.appendChild(attachmentsOption);
+
 			// Date filter option (bulk export only)
 			const dateOption = document.createElement('div');
 			dateOption.className = 'mb-4' + (isInConversation ? ' hidden' : '');
@@ -1634,19 +1663,22 @@
 			const initialFormat = lastFormat.split('_')[0];
 			treeOption.classList.toggle('hidden', !['librechat', 'raw', 'html', 'zip'].includes(initialFormat));
 			thinkingOption.classList.toggle('hidden', initialFormat !== 'md');
+			attachmentsOption.classList.toggle('hidden', initialFormat !== 'md');
 
 			// Update option visibility on select change
 			formatSelect.onchange = () => {
 				const format = formatSelect.value.split('_')[0];
 				treeOption.classList.toggle('hidden', !['librechat', 'raw', 'html', 'zip'].includes(format));
 				thinkingOption.classList.toggle('hidden', format !== 'md');
+				attachmentsOption.classList.toggle('hidden', format !== 'md');
 				toggleInput.checked = ['html', 'zip'].includes(format);
 			};
 
 			// Export button handler
 			exportButton.onclick = async () => {
 				const exportOptions = {
-					includeThinking: thinkingToggleInput?.checked ?? true
+					includeThinking: thinkingToggleInput?.checked ?? true,
+					includeAttachments: attachmentsToggleInput?.checked ?? false
 				};
 
 				if (isInConversation) {

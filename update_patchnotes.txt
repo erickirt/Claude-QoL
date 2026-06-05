@@ -1,3 +1,4 @@
-Add "Copy as rich text" button to content blocks — pastes with formatting into email, Docs, etc.
-Add timestamp/model slug in HTML/MD exports
-Store active flags in storage until expiry so they don't disappear early
+Add option to include attachments in markdown exports
+Fix auto-speak not working for new messages
+Add searchable dropdowns
+Add "copy as rich text" button to content blocks (@cancan101) and artifacts.

@@ -348,8 +348,28 @@
 	class ElevenLabsProvider extends Provider {
 		constructor(onStateChange = null) {
 			super(onStateChange);
+			this.modelCharLimits = {};
 			if (onStateChange) {
 				streamingPlaybackManager.onStateChange = onStateChange;
+			}
+		}
+
+		async fetchModelCharLimits(apiKey) {
+			if (Object.keys(this.modelCharLimits).length > 0) return;
+			try {
+				const [userResponse, models] = await Promise.all([
+					fetch('https://api.elevenlabs.io/v1/user', { headers: { 'xi-api-key': apiKey } }),
+					this.getModels(apiKey)
+				]);
+				const isFree = userResponse.ok && (await userResponse.json()).subscription?.status === 'free';
+				for (const model of models) {
+					const limit = isFree
+						? model.max_characters_request_free_user
+						: model.max_characters_request_subscribed_user;
+					if (limit) this.modelCharLimits[model.model_id] = limit;
+				}
+			} catch (e) {
+				console.warn('Failed to fetch ElevenLabs model char limits:', e);
 			}
 		}
 
@@ -416,7 +436,13 @@
 				}
 
 				const models = await response.json();
-				return models.filter(model => model.can_do_text_to_speech);
+				return models.filter(model => model.can_do_text_to_speech).map(model => ({
+					model_id: model.model_id,
+					name: model.name,
+					can_do_text_to_speech: model.can_do_text_to_speech,
+					max_characters_request_free_user: model.max_characters_request_free_user,
+					max_characters_request_subscribed_user: model.max_characters_request_subscribed_user
+				}));
 
 			} catch (error) {
 				console.error('Failed to load models:', error);
@@ -597,7 +623,9 @@ JSON array:`;
 		async play(text, voice, model, apiKey) {
 			await streamingPlaybackManager.startSession();
 
-			const chunks = this.chunkText(text, 9000);
+			await this.fetchModelCharLimits(apiKey);
+			const maxChars = this.modelCharLimits[model] ?? 4900; // Default to 4900 if limit not found
+			const chunks = this.chunkText(text, maxChars);
 
 			for (const chunk of chunks) {
 				streamingPlaybackManager.queue(
@@ -610,7 +638,9 @@ JSON array:`;
 		}
 
 		async queue(text, voice, model, apiKey, extra = {}) {
-			const chunks = this.chunkText(text, 9000);
+			await this.fetchModelCharLimits(apiKey);
+			const maxChars = this.modelCharLimits[model] ?? 4900; // Default to 4900 if limit not found
+			const chunks = this.chunkText(text, maxChars);
 
 			for (const chunk of chunks) {
 				streamingPlaybackManager.queue(

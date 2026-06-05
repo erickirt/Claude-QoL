@@ -120,6 +120,7 @@ async function bustReactQueryCache() {
 		request.onerror = () => resolve();
 	});
 }
+bustReactQueryCache();
 
 // Shared streaming freshness check.
 // Fetches apiUrl, reads first ~8KB to find updated_at, compares with cachedEntry.
@@ -1891,6 +1892,25 @@ async function getCurrentUserStyle(orgId) {
 	}
 }
 
+async function getEffectiveStyle(orgId, conversationId) {
+	const overrideStyle = await new Promise((resolve) => {
+		const requestId = Math.random().toString(36).substr(2, 9);
+		const listener = (event) => {
+			if (event.data.type === 'perchat-style-response' && event.data.requestId === requestId) {
+				window.removeEventListener('message', listener);
+				resolve(event.data.style);
+			}
+		};
+		window.addEventListener('message', listener);
+		window.postMessage({ type: 'perchat-style-request', conversationId, requestId }, '*');
+		setTimeout(() => { window.removeEventListener('message', listener); resolve(null); }, 500);
+	});
+
+	if (overrideStyle?.type === 'none') return null;
+	if (overrideStyle) return overrideStyle;
+	return getCurrentUserStyle(orgId);
+}
+
 async function listStyles(orgId) {
 	const response = await fetch(`/api/organizations/${orgId}/list_styles`);
 	if (!response.ok) {
@@ -2007,10 +2027,10 @@ async function isLikelyTextFile(file) {
 }
 
 const CLAUDE_MODELS = [
+	{ value: 'claude-opus-4-8', label: 'Opus 4.8' },
 	{ value: 'claude-opus-4-7', label: 'Opus 4.7' },
 	{ value: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
 	{ value: 'claude-opus-4-6', label: 'Opus 4.6' },
-	{ value: 'claude-sonnet-4-5-20250929', label: 'Sonnet 4.5' },
 	{ value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
 	{ value: 'claude-3-opus-20240229', label: 'Opus 3' },
 ]
