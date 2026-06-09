@@ -3,7 +3,7 @@
 (function() {
 	'use strict';
 
-	const HIDDEN_SKILL_NAME = 'QOL_ENCRYPTIONKEY_DO_NOT_DELETE';
+	const HIDDEN_SKILL_NAME = 'qol-encryptionkey-do-not-delete';
 
 	const originalFetch = window.fetch;
 	window.fetch = async (...args) => {

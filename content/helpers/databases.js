@@ -53,7 +53,7 @@
 	};
 
 	// ======== ENCRYPTION ========
-	const ENCRYPTION_SKILL_NAME = 'QOL_ENCRYPTIONKEY_DO_NOT_DELETE';
+	const ENCRYPTION_SKILL_NAME = 'qol-encryptionkey-do-not-delete';
 	let _encryptionKeyPromise = null;
 	let _keyHash = null; // first 8 hex chars of SHA-256 of the raw key
 
@@ -73,8 +73,12 @@
 	// Encrypt: returns { v: 1, keyHash, data: base64(iv + ciphertext) }
 	async function encryptData(data) {
 		const key = await getEncryptionKey();
-		if (!key) return data; // plaintext passthrough
+		if (!key) {
+			console.log('[QOL-Encryption] encrypt: no key, plaintext passthrough');
+			return data;
+		}
 
+		console.log('[QOL-Encryption] Encrypting with keyHash:', _keyHash);
 		const iv = crypto.getRandomValues(new Uint8Array(12));
 		const encoded = new TextEncoder().encode(JSON.stringify(data));
 		const ciphertext = await crypto.subtle.encrypt(
@@ -92,12 +96,14 @@
 	async function decryptData(item) {
 		// Plaintext passthrough — not an encrypted wrapper
 		if (!item || typeof item !== 'object' || !item.v || !item.keyHash) {
+			console.log('[QOL-Encryption] decrypt: plaintext passthrough');
 			return item;
 		}
 
 		const key = await getEncryptionKey();
 
-		// Key mismatch or no key available — item is unrecoverable
+		console.log('[QOL-Encryption] Decrypting, item keyHash:', item.keyHash, 'current keyHash:', _keyHash);
+
 		if (!key || item.keyHash !== _keyHash) {
 			throw new Error(`Key mismatch: item encrypted with ${item.keyHash}, current key is ${_keyHash || 'none'}`);
 		}
