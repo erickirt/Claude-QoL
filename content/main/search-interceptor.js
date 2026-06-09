@@ -41,7 +41,7 @@
 			lastSearchQuery = searchQuery; // Store the query
 
 			if (searchQuery) {
-				//console.log('[Search Interceptor] Detected search query:', searchQuery);
+				//console.log('[QOL-SearchInterceptor] Detected search query:', searchQuery);
 
 				// Ask ISOLATED if we should intercept
 				const messageId = messageIdCounter++;
@@ -52,7 +52,7 @@
 					// Timeout after 30 seconds
 					setTimeout(() => {
 						if (pendingSearches.has(messageId)) {
-							console.warn('[Search Interceptor] Timeout waiting for ISOLATED response');
+							console.warn('[QOL-SearchInterceptor] Timeout waiting for ISOLATED response');
 							resolve({ intercept: false });
 							pendingSearches.delete(messageId);
 						}
@@ -69,7 +69,7 @@
 				const response = await responsePromise;
 
 				if (response.intercept) {
-					console.log('[Search Interceptor] Intercepting with custom results:', JSON.stringify(response.results));
+					console.log('[QOL-SearchInterceptor] Intercepting with custom results:', JSON.stringify(response.results));
 
 					// Return fake Response with our results
 					return new Response(JSON.stringify({data: response.results, has_more: false}), {
@@ -80,7 +80,7 @@
 						}
 					});
 				} else {
-					//console.log('[Search Interceptor] Passing through to original fetch');
+					//console.log('[QOL-SearchInterceptor] Passing through to original fetch');
 				}
 			}
 		}
@@ -115,27 +115,27 @@
 				return;
 			}
 
-			console.log('[Click Handler] Attaching handler to:', link.textContent.substring(0, 50));
+			console.log('[QOL-SearchInterceptor] Attaching handler to:', link.textContent.substring(0, 50));
 			link.dataset.searchHandlerAttached = 'true';
 
 			link.addEventListener('click', () => {
-				console.log('[Click Handler] Link clicked!');
+				console.log('[QOL-SearchInterceptor] Link clicked!');
 
 				// Extract conversation ID from href
 				const match = link.getAttribute('href').match(/\/chat\/([a-f0-9-]+)/);
 				if (!match) {
-					console.log('[Click Handler] Could not extract conversation ID from:', link.getAttribute('href'));
+					console.log('[QOL-SearchInterceptor] Could not extract conversation ID from:', link.getAttribute('href'));
 					return;
 				}
 
 				const conversationId = match[1];
-				//console.log('[Search Interceptor] Storing query for conversation:', conversationId, lastSearchQuery);
+				//console.log('[QOL-SearchInterceptor] Storing query for conversation:', conversationId, lastSearchQuery);
 
 				// Get existing queries object
 				const queries = JSON.parse(localStorage.getItem('global_search_queries') || '{}');
 				queries[conversationId] = lastSearchQuery;
 				localStorage.setItem('global_search_queries', JSON.stringify(queries));
-				//console.log('[Search Interceptor] Stored queries:', queries);
+				//console.log('[QOL-SearchInterceptor] Stored queries:', queries);
 			});
 		});
 	}
@@ -143,5 +143,5 @@
 	// Run click handler attachment periodically
 	setInterval(attachClickHandlers, 500);
 
-	console.log('[Search Interceptor] Installed');
+	console.log('[QOL-SearchInterceptor] Installed');
 })();

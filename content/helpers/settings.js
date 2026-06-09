@@ -262,7 +262,7 @@ if (_isIsolatedWorld) {
 	};
 
 	settingsRegistry.onChange = function () {
-		console.warn('[SettingsRegistry] onChange is not available in MAIN world');
+		console.warn('[QOL-Settings] onChange is not available in MAIN world');
 		return () => { };
 	};
 

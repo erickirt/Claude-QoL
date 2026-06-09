@@ -243,12 +243,12 @@
 
 					gdprProcessedConversations++;
 				} catch (error) {
-					console.error(`[GDPR Export] Failed to load conversation ${conv.uuid}:`, error);
+					console.error(`[QOL-GDPRExport] Failed to load conversation ${conv.uuid}:`, error);
 					gdprProcessedConversations++;
 				}
 			}
 
-			console.log(`[GDPR Export] Processed batch of ${message.batch.length}, total processed: ${gdprProcessedConversations}/${gdprTotalConversations}`);
+			console.log(`[QOL-GDPRExport] Processed batch of ${message.batch.length}, total processed: ${gdprProcessedConversations}/${gdprTotalConversations}`);
 
 			if (gdprLoadingModal) {
 				gdprLoadingModal.setContent(createLoadingContent(
@@ -257,7 +257,7 @@
 			}
 
 			if (gdprProcessedConversations >= gdprTotalConversations) {
-				console.log('[GDPR Export] All conversations processed');
+				console.log('[QOL-GDPRExport] All conversations processed');
 				if (gdprLoadingModal) {
 					gdprLoadingModal.destroy();
 					gdprLoadingModal = null;
@@ -273,14 +273,14 @@
 	async function syncConversationsViaExport(loadingModal) {
 		const orgId = getOrgId();
 
-		console.log('[GDPR Export] Starting export sync for conversations');
+		console.log('[QOL-GDPRExport] Starting export sync for conversations');
 
 		// Phase 1: Request export
 		loadingModal.setContent(createLoadingContent(
 			'Requesting data export...'
 		));
 
-		console.log('[GDPR Export] Requesting export from API...');
+		console.log('[QOL-GDPRExport] Requesting export from API...');
 		const exportResponse = await fetch(`/api/organizations/${orgId}/export_data`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' }
@@ -288,13 +288,13 @@
 
 		if (!exportResponse.ok) {
 			const errorText = await exportResponse.text();
-			console.error('[GDPR Export] Export request failed:', exportResponse.status, errorText);
+			console.error('[QOL-GDPRExport] Export request failed:', exportResponse.status, errorText);
 			throw new Error(`Export request failed: ${exportResponse.status}`);
 		}
 
 		const exportData = await exportResponse.json();
 		const nonce = exportData.nonce;
-		console.log('[GDPR Export] Export requested, nonce:', nonce);
+		console.log('[QOL-GDPRExport] Export requested, nonce:', nonce);
 
 		// Phase 2: Poll for completion
 		const POLL_INTERVAL_MS = 30000; // 30 seconds
@@ -324,12 +324,12 @@
 
 					if (urlMatch) {
 						storageUrl = urlMatch[0].replace(/\\u0026/g, '&');
-						console.log('[GDPR Export] Found storage URL');
+						console.log('[QOL-GDPRExport] Found storage URL');
 						break;
 					}
 				}
 			} catch (error) {
-				console.warn(`[GDPR Export] Poll failed:`, error.message);
+				console.warn(`[QOL-GDPRExport] Poll failed:`, error.message);
 			}
 
 			// Wait before next attempt
@@ -353,7 +353,7 @@
 		}
 
 		// Phase 3: Request download from background
-		console.log('[GDPR Export] Requesting download from background script...');
+		console.log('[QOL-GDPRExport] Requesting download from background script...');
 		loadingModal.setContent(createLoadingContent('Downloading and processing export...'));
 
 		gdprLoadingModal = createLoadingModal('Importing...');
@@ -370,7 +370,7 @@
 			throw new Error(`Download failed: ${downloadResult.error}`);
 		}
 
-		console.log('[GDPR Export] Processing', downloadResult.totalCount, 'conversations...');
+		console.log('[QOL-GDPRExport] Processing', downloadResult.totalCount, 'conversations...');
 		gdprLoadingModal.show();
 	}
 
@@ -398,12 +398,12 @@
 		if (event.data.type !== 'SEARCH_INTERCEPT') return;
 
 		const { messageId, query, url } = event.data;
-		//console.log('[Search Handler] Received intercept request:', query);
+		//console.log('[QOL-Search] Received intercept request:', query);
 
 		// If text search is not enabled, don't intercept
 
 		if (sessionStorage.getItem('text_search_enabled') != 'true') {
-			//console.log('[Search Handler] Text search disabled, not intercepting');
+			//console.log('[QOL-Search] Text search disabled, not intercepting');
 			window.postMessage({
 				type: 'SEARCH_RESPONSE',
 				messageId,
@@ -416,7 +416,7 @@
 			// Search all conversations
 			const results = await searchAllConversations(query);
 
-			//console.log('[Search Handler] Found', results.length, 'matching conversations');
+			//console.log('[QOL-Search] Found', results.length, 'matching conversations');
 
 			window.postMessage({
 				type: 'SEARCH_RESPONSE',
@@ -426,7 +426,7 @@
 			}, '*');
 
 		} catch (error) {
-			console.error('[Search Handler] Search failed:', error);
+			console.error('[QOL-Search] Search failed:', error);
 			window.postMessage({
 				type: 'SEARCH_RESPONSE',
 				messageId,
@@ -443,7 +443,7 @@
 
 		const totalStart = performance.now();
 		console.log('========================================');
-		console.log('[Search] Query:', query);
+		console.log('[QOL-Search] Query:', query);
 
 		const lowerQuery = query.toLowerCase();
 
@@ -454,7 +454,7 @@
 			searchDB.getAllMessages()
 		]);
 		const loadTime = performance.now() - loadStart;
-		console.log(`[Search] Loaded ${allMessages.length} conversations in ${loadTime.toFixed(0)}ms`);
+		console.log(`[QOL-Search] Loaded ${allMessages.length} conversations in ${loadTime.toFixed(0)}ms`);
 
 		// Search through plain text
 		const searchStart = performance.now();
@@ -487,7 +487,7 @@
 
 		const totalTime = performance.now() - totalStart;
 
-		console.log(`[Search] Results:`);
+		console.log(`[QOL-Search] Results:`);
 		console.log(`  - Load: ${loadTime.toFixed(0)}ms`);
 		console.log(`  - Search: ${searchTime.toFixed(0)}ms`);
 		console.log(`  - TOTAL: ${totalTime.toFixed(0)}ms`);

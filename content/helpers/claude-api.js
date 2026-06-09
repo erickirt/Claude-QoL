@@ -924,7 +924,7 @@ class ClaudeFile {
 			const blobIsImage = blobMime.startsWith('image/');
 			const filenameIsPdf = filenameMime === 'application/pdf';
 			if (blobIsImage && filenameIsPdf) {
-				console.warn(`[ClaudeFile] MIME mismatch for "${fileName}": blob is ${blobMime} but filename suggests ${filenameMime}. Using blob MIME.`);
+				console.warn(`[QOL-ClaudeFile] MIME mismatch for "${fileName}": blob is ${blobMime} but filename suggests ${filenameMime}. Using blob MIME.`);
 				mimeType = blobMime;
 				const ext = blobMime.split('/')[1]?.replace('jpeg', 'jpg') || 'png';
 				fileName = fileName.replace(/\.[^.]+$/, `.${ext}`);
@@ -934,7 +934,7 @@ class ClaudeFile {
 
 		// Direct upload for images and PDFs, conversion for other documents
 		const isDirectUpload = mimeType.startsWith('image/') || mimeType === 'application/pdf';
-		console.log(`[ClaudeFile] Uploading file "${fileName}" as ${isDirectUpload ? 'direct upload' : 'document conversion'} (MIME: ${mimeType})`);
+		console.log(`[QOL-ClaudeFile] Uploading file "${fileName}" as ${isDirectUpload ? 'direct upload' : 'document conversion'} (MIME: ${mimeType})`);
 		if (isDirectUpload) {
 			// Regular file upload
 			const formData = new FormData();
@@ -1685,7 +1685,7 @@ class ClaudeProject {
 			try {
 				const response = await fetch(downloadUrl);
 				if (!response.ok) {
-					console.error(`[ClaudeProject] Failed to fetch ${file.file_name}`);
+					console.error(`[QOL-ClaudeProject] Failed to fetch ${file.file_name}`);
 					continue;
 				}
 				const blob = await response.blob();
@@ -1694,7 +1694,7 @@ class ClaudeProject {
 				const filename = this._makeUniqueFilename(file.file_name, file.file_uuid);
 				await addToZip(zip, filename, blob);
 			} catch (error) {
-				console.error(`[ClaudeProject] Error downloading ${file.file_name}:`, error);
+				console.error(`[QOL-ClaudeProject] Error downloading ${file.file_name}:`, error);
 			}
 		}
 
@@ -1855,33 +1855,41 @@ function getProjectId() {
 	return match ? match[1] : null;
 }
 
-// ======== Connector API (used for encryption key storage) ========
+// ======== Skills API (used for encryption key storage) ========
 
-async function listConnectors(orgId) {
-	const response = await fetch(`/api/organizations/${orgId}/mcp/remote_servers`);
+async function listSkills(orgId) {
+	const response = await fetch(`/api/organizations/${orgId}/skills/list-skills`);
 	if (!response.ok) {
-		throw new Error(`Failed to list connectors: ${response.statusText}`);
+		throw new Error(`Failed to list skills: ${response.statusText}`);
 	}
 	return await response.json();
 }
 
-async function createConnector(orgId, name, url) {
-	const response = await fetch(`/api/organizations/${orgId}/mcp/remote_servers`, {
+async function createSkill(orgId, name, description) {
+	const response = await fetch(`/api/organizations/${orgId}/skills/create-simple-skill`, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({
-			name,
-			url,
-			custom_oauth_client_id: 'This fake "connector" just contains the encryption key to keep your Claude QOL data secure.',
-			custom_oauth_client_secret: 'dummy',
-			id_jag_config: null,
-			attestations: []
-		})
+		body: JSON.stringify({ name, description, instructions: '' })
 	});
 
 	if (!response.ok) {
 		const error = await response.json();
-		throw new Error(error.message || 'Failed to create connector');
+		throw new Error(error.message || 'Failed to create skill');
+	}
+
+	return await response.json();
+}
+
+async function disableSkill(orgId, skillId) {
+	const response = await fetch(`/api/organizations/${orgId}/skills/disable-skill`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ skill_id: skillId })
+	});
+
+	if (!response.ok) {
+		const error = await response.json();
+		throw new Error(error.message || 'Failed to disable skill');
 	}
 
 	return await response.json();

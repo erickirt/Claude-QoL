@@ -140,7 +140,7 @@ window.fetch = async (...args) => {
 				}
 
 				if (insertions.length > 0) {
-					//console.log('[ImageExtractor] Final content array for message', msg.uuid, JSON.parse(JSON.stringify(content)));
+					//console.log('[QOL-ImageExtractor] Final content array for message', msg.uuid, JSON.parse(JSON.stringify(content)));
 				}
 			}
 		}
@@ -182,7 +182,7 @@ window.fetch = async (...args) => {
 	function appendStyle() {
 		if (document.head) {
 			document.head.appendChild(style);
-			console.log('[ImageExtractor] Injected custom styles for tool result images.');
+			console.log('[QOL-ImageExtractor] Injected custom styles for tool result images.');
 		} else {
 			document.addEventListener('DOMContentLoaded', () => document.head.appendChild(style));
 		}

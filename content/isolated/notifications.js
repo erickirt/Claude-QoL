@@ -356,7 +356,7 @@ class QoLNotifications {
 					.filter(line => line.trim().length > 0);
 			}
 		} catch (error) {
-			console.error('[Claude QoL] Failed to load patch notes:', error);
+			console.error('[QOL-Notifications] Failed to load patch notes:', error);
 		}
 
 		await settingsRegistry.set(SETTINGS_KEYS.NOTIFICATIONS.PREVIOUS_VERSION, currentVersion);

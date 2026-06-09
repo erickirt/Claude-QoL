@@ -113,7 +113,7 @@
 			return new Promise(async (resolve, reject) => {
 				try {
 					if (this.currentSessionId !== sessionId) {
-						console.log(`[Session ${sessionId}] Stream aborted before start`);
+						console.log(`[QOL-TTS Session ${sessionId}] Stream aborted before start`);
 						this.isGenerating = false;
 						resolve();
 						return;
@@ -141,14 +141,14 @@
 						const { done, value } = await reader.read();
 						if (done) {
 							this.isGenerating = false;
-							console.log(`[Session ${sessionId}] Audio stream fully read`);
+							console.log(`[QOL-TTS Session ${sessionId}] Audio stream fully read`);
 							break;
 						}
 
 						if (firstChunk && this.state === 'loading') {
 							this.changeState('playing');
 							firstChunk = false;
-							console.log(`[Session ${sessionId}] Audio started playing`);
+							console.log(`[QOL-TTS Session ${sessionId}] Audio started playing`);
 						}
 
 						const combinedData = new Uint8Array(leftoverBytes.length + value.length);
@@ -195,13 +195,13 @@
 				} catch (error) {
 					this.isGenerating = false;
 					if (error.name === 'AbortError') {
-						console.log(`[Session ${sessionId}] Fetch aborted`);
+						console.log(`[QOL-TTS Session ${sessionId}] Fetch aborted`);
 						resolve();
 					} else {
 						reject(error);
 					}
 				} finally {
-					console.log(`[Session ${sessionId}] Stream processing completed or aborted`);
+					console.log(`[QOL-TTS Session ${sessionId}] Stream processing completed or aborted`);
 				}
 			});
 		}

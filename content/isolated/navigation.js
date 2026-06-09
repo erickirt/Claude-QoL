@@ -21,7 +21,7 @@
 			}
 			localStorage.removeItem('navigation_bookmarks');
 		} catch (e) {
-			console.error('[Navigation] Failed to migrate bookmarks from localStorage:', e);
+			console.error('[QOL-Navigation] Failed to migrate bookmarks from localStorage:', e);
 		}
 	}
 

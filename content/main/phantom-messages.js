@@ -24,7 +24,7 @@ getPhantomMessages = async function (conversationId) {
 
 	const localData = localStorage.getItem(newKey) || localStorage.getItem(oldKey);
 	if (localData) {
-		console.log(`[Migration] Migrating ${conversationId} to IndexedDB`);
+		console.log(`[QOL-PhantomMessages] Migrating ${conversationId} to IndexedDB`);
 		const messagesJson = JSON.parse(localData);
 		const messages = messagesJson.map(json => new ClaudeMessage(conversation, json));
 		await storePhantomMessages(conversationId, messages);
@@ -393,7 +393,7 @@ navigator.clipboard.write = async (data) => {
 
 		return originalClipboardWrite.call(navigator.clipboard, [new ClipboardItem(types)]);
 	} catch (error) {
-		console.error('[Phantom Messages] Error cleaning clipboard text:', error);
+		console.error('[QOL-PhantomMessages] Error cleaning clipboard text:', error);
 		return originalClipboardWrite.call(navigator.clipboard, data);
 	}
 };

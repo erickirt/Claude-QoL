@@ -246,15 +246,15 @@
 			return;
 		}
 
-		console.log('[Auto-open] Current conversation ID:', conversationId);
+		console.log('[QOL-ChatSearch] Current conversation ID:', conversationId);
 
 		const queriesJson = localStorage.getItem('global_search_queries');
-		console.log('[Auto-open] Queries from storage:', queriesJson);
+		console.log('[QOL-ChatSearch] Queries from storage:', queriesJson);
 
 		const queries = JSON.parse(queriesJson || '{}');
 		const query = queries[conversationId];
 
-		console.log('[Auto-open] Query for this conversation:', query);
+		console.log('[QOL-ChatSearch] Query for this conversation:', query);
 
 		if (!query) {
 			// No query for this conversation, mark as processed
@@ -265,7 +265,7 @@
 		console.log('Auto-open search detected for query:', query);
 
 		const searchButton = document.querySelector('.search-button');
-		console.log('[Auto-open] Search button found:', !!searchButton);
+		console.log('[QOL-ChatSearch] Search button found:', !!searchButton);
 
 		if (searchButton) {
 			console.log('Search button found, opening modal directly');

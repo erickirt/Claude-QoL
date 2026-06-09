@@ -37,18 +37,18 @@
 	})();
 
 	function updateSettingsButton(state, isProcessing) {
-		console.log('[updateSettingsButton] Called with:', { state, isProcessing });
+		console.log('[QOL-TTS] Called with:', { state, isProcessing });
 
 		const button = document.querySelector('.tts-settings-button');
 		if (!button) {
-			console.log('[updateSettingsButton] Button not found in DOM');
+			console.log('[QOL-TTS] Button not found in DOM');
 			return;
 		}
 
-		console.log('[updateSettingsButton] Button found, updating...');
+		console.log('[QOL-TTS] Button found, updating...');
 
 		if (state === 'loading' || state === 'stopping') {
-			console.log('[updateSettingsButton] Setting loading/stopping state');
+			console.log('[QOL-TTS] Setting loading/stopping state');
 			button.innerHTML = `
             <div class="relative w-5 h-5">
                 <svg class="spinner-segment absolute inset-0" xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 20 20">
@@ -62,11 +62,11 @@
         `;
 			ButtonBar.updateTooltip('tts-settings-button', state === 'loading' ? 'Loading audio...' : 'Stopping...');
 		} else if (state === 'playing' || isProcessing) {
-			console.log('[updateSettingsButton] Setting playing state');
+			console.log('[QOL-TTS] Setting playing state');
 			button.innerHTML = PAUSE_ICON;
 			ButtonBar.updateTooltip('tts-settings-button', 'Stop playback');
 		} else {
-			console.log('[updateSettingsButton] Setting idle state');
+			console.log('[QOL-TTS] Setting idle state');
 			button.innerHTML = SPEAKER_ICON;
 			ButtonBar.updateTooltip('tts-settings-button', 'TTS Settings');
 		}
