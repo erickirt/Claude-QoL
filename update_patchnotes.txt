@@ -1,2 +1,2 @@
-Patch encryption to use skills rather than a connector, as it was making errors appear in claude code
-Add Fable 5 support
+Added a loading modal when switching preferences
+Fixed some issues around mismatched settings when importing/forking
